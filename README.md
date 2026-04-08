@@ -57,12 +57,14 @@ Forge installs five OpenCode agent definition files:
 
 ## Installation
 
-Run Forge from a local checkout of this repository.
+Forge installs the managed agent files into your OpenCode agents directory by fetching them from `raw.githubusercontent.com`.
+
+Default ref: `main`
 
 ### macOS / Linux
 
 ```sh
-sh install.sh
+curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | bash
 ```
 
 Installed to:
@@ -74,7 +76,7 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/opencode/agents
 ### Windows
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.ps1').Content))"
 ```
 
 Installed to:
@@ -85,7 +87,42 @@ $env:APPDATA\opencode\agents
 
 ## Updating
 
-Re-run the installer to overwrite the managed Forge agent files with the versions from your current checkout.
+Re-run the installer to overwrite the managed Forge agent files in place.
+
+## Local checkout fallback
+
+If you are developing locally or prefer running from a checkout, these commands remain supported:
+
+### macOS / Linux
+
+```sh
+sh install.sh
+```
+
+### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+## Optional ref override
+
+The installers use `main` by default.
+
+### macOS / Linux
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | FORGE_REF=<ref> bash
+```
+
+### Windows
+
+```powershell
+$env:FORGE_REF = '<ref>'
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.ps1').Content))"
+```
+
+Clear `FORGE_REF` afterward if you do not want it to affect later runs.
 
 ## Uninstall
 
