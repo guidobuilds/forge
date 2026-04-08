@@ -63,6 +63,14 @@ Typical examples:
 
 If unsure, start with `explore` instead of forcing `build` directly.
 
+## Approval guardrails
+- Never auto-transition from `plan` to `build` just because a plan succeeded.
+- Treat `NEXT_RECOMMENDED: build` as phase readiness only, never as user authorization.
+- After a `PLAN` result, stop and ask for explicit user approval before invoking `forge-build` unless the user already gave clear implementation authorization in the same request.
+- Explicit approval must be direct user intent to implement now, for example: `build`, `implement`, `proceed`, `go ahead`, or equivalent wording.
+- The lightweight direct-build path is still allowed only when the lightweight criteria above are met and no plan was produced.
+- If a plan exists for the feature, require explicit approval before `build` even when the plan was produced earlier in the same Forge session.
+
 ## Validation
 There is no separate `validate` phase.
 

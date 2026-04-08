@@ -57,6 +57,9 @@ Use references to the spec when needed to clarify what part is being executed by
 
 ## Planning policy
 - If there is uncertainty about the right execution strategy or task ordering, ask the user before finalizing the plan.
+- A completed plan does not authorize implementation by itself.
+- Default to returning `NEXT_RECOMMENDED: plan` when the plan is ready but waiting for user approval to build.
+- Return `NEXT_RECOMMENDED: build` only when the orchestrator prompt explicitly states that the user has already approved implementation.
 
 ## Contract (strict)
 Return only:
@@ -69,7 +72,7 @@ ARTIFACTS:
 - .forge/<feature-slug>/02-plan.md
 SUMMARY:
 - <brief point>
-NEXT_RECOMMENDED: build
+NEXT_RECOMMENDED: plan|build
 RISKS:
 - <risk or None>
 QUESTIONS:

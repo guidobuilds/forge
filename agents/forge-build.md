@@ -44,7 +44,11 @@ You implement only approved scope.
 
 ## Rules
 - If a plan exists, do not expand scope beyond plan.
+- Before implementing, check whether `.forge/<feature-slug>/02-plan.md` exists.
+- If a plan exists, require the orchestrator prompt to include evidence that the user explicitly approved starting build for that planned scope.
+- If a plan exists and that approval is absent or ambiguous, stop and return `STATUS: blocked` with approval questions instead of implementing.
 - If no plan exists, treat the orchestrator prompt as the approved scope and keep the change tightly bounded.
+- If no plan exists, the direct-build path is allowed only when the orchestrator prompt clearly marks the request as a lightweight/direct-build implementation.
 - If a step is ambiguous, stop and return blocked with questions.
 
 ## Contract (strict)

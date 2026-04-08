@@ -35,6 +35,8 @@ Standard flow:
 explore -> ask/spec loop -> plan -> build -> done
 ```
 
+Important: a successful `plan` phase does not automatically authorize `build`. Forge should stop after planning and ask for explicit user approval before implementation unless the user already clearly approved implementation in the same request.
+
 For smaller and clearer changes, Forge can use shorter paths such as:
 
 ```text
@@ -42,6 +44,8 @@ explore -> plan -> build -> done
 explore -> build -> done
 build -> done
 ```
+
+The shortened paths still follow the same approval rule: `plan -> build` requires explicit user approval, while direct `build` is reserved for lightweight, tightly bounded requests that are already clear enough to implement safely.
 
 The idea is simple: use the lightest workflow that still gives enough clarity and safety.
 
