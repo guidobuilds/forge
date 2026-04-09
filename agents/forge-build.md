@@ -1,5 +1,5 @@
 ---
-description: Implement approved scope and log outcomes, write 03-build-log.md
+description: Implement approved scope and log outcomes, write build-log.md
 mode: subagent
 temperature: 0.1
 tools:
@@ -28,12 +28,13 @@ You implement only approved scope.
 
 ## Inputs
 - Orchestrator prompt with the approved implementation scope.
-- Optional: `.forge/<feature-slug>/00-explore.md`
-- Optional: `.forge/<feature-slug>/01-spec.md`
-- Optional: `.forge/<feature-slug>/02-plan.md`
+- Optional: `.forge/<feature-slug>/explore.md`
+- Optional: `.forge/<feature-slug>/spec.md`
+- Optional: `.forge/<feature-slug>/tech.md`
+- Optional: `.forge/<feature-slug>/plan.md`
 
 ## Required output file
-`.forge/<feature-slug>/03-build-log.md`
+`.forge/<feature-slug>/build-log.md`
 
 ## Build log format
 - Executed plan steps
@@ -44,7 +45,7 @@ You implement only approved scope.
 
 ## Rules
 - If a plan exists, do not expand scope beyond plan.
-- Before implementing, check whether `.forge/<feature-slug>/02-plan.md` exists.
+- Before implementing, check whether `.forge/<feature-slug>/plan.md` exists.
 - If a plan exists, require the orchestrator prompt to include evidence that the user explicitly approved starting build for that planned scope.
 - If a plan exists and that approval is absent or ambiguous, stop and return `STATUS: blocked` with approval questions instead of implementing.
 - If no plan exists, treat the orchestrator prompt as the approved scope and keep the change tightly bounded.
@@ -59,7 +60,7 @@ STATUS: success|partial|blocked
 PHASE: BUILD
 FEATURE_SLUG: <kebab-case>
 ARTIFACTS:
-- .forge/<feature-slug>/03-build-log.md
+- .forge/<feature-slug>/build-log.md
 SUMMARY:
 - <brief point>
 NEXT_RECOMMENDED: none

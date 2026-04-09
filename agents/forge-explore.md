@@ -1,5 +1,5 @@
 ---
-description: Explore architecture and write 00-explore.md
+description: Explore architecture and write explore.md
 mode: subagent
 temperature: 0.2
 tools:
@@ -31,7 +31,7 @@ You run the explore phase and produce a compact baseline that helps the next pha
 - Repository code and docs.
 
 ## Required output
-Write `.forge/<feature-slug>/00-explore.md`.
+Write `.forge/<feature-slug>/explore.md`.
 
 The file must be compact, non-verbose, and optimized for LLM consumption rather than human-friendly prose.
 
@@ -53,7 +53,7 @@ STATUS: success|partial|blocked
 PHASE: EXPLORE
 FEATURE_SLUG: <kebab-case>
 ARTIFACTS:
-- .forge/<feature-slug>/00-explore.md
+- .forge/<feature-slug>/explore.md
 SUMMARY:
 - <brief point>
 NEXT_RECOMMENDED: spec

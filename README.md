@@ -12,12 +12,12 @@ It is actively shaped by hands-on usage, and there is no guarantee that developm
 
 ## What Forge Is
 
-Forge is an OpenCode-oriented workflow framework built around one orchestrator and four phase agents.
+Forge is an OpenCode-oriented workflow framework built around one orchestrator and five phase agents.
 
 It is designed to:
 - reduce ambiguity before implementation
 - make agent work more structured and repeatable
-- separate exploration, specification, planning, and execution
+- separate exploration, product definition, technical design, execution planning, and implementation
 - support longer working sessions through context engineering and subagents
 - improve the precision of code-agent-driven delivery
 
@@ -32,8 +32,15 @@ The main agent, `forge`, acts as the orchestrator. It decides which path is appr
 Standard flow:
 
 ```text
-explore -> ask/spec loop -> plan -> build -> done
+explore -> spec -> tech -> plan -> build -> done
 ```
+
+Phase responsibilities:
+- `explore`: what exists
+- `spec`: what we want, expressed as functional `TASK-*` requirements
+- `tech`: technical implementation definitions for those same `TASK-*` requirements, with each technical definition explicitly linked back to its parent functional `TASK-*`
+- `plan`: execution order using the approved spec + tech artifacts, without redefining technical design
+- `build`: implementation plus validation reporting
 
 Important: a successful `plan` phase does not automatically authorize `build`. Forge should stop after planning and ask for explicit user approval before implementation unless the user already clearly approved implementation in the same request.
 
@@ -49,15 +56,26 @@ The shortened paths still follow the same approval rule: `plan -> build` require
 
 The idea is simple: use the lightest workflow that still gives enough clarity and safety.
 
+## Canonical artifacts
+
+Forge phases use a stable artifact convention under `.forge/<feature-slug>/`:
+
+- `explore.md`: what exists
+- `spec.md`: what we want, with numbered `TASK-*` functional requirements
+- `tech.md`: technical definitions for those same `TASK-*` requirements, allowing one or more technical definitions under a shared `TASK-*` umbrella while explicitly linking each definition to its parent functional task
+- `plan.md`: execution order derived from spec + tech, without restating the technical design
+- `build-log.md`: implementation record, validation performed, and any deviations/follow-ups
+
 ## Agents
 
-Forge installs five OpenCode agent definition files:
+Forge installs six OpenCode agent definition files:
 
 - `forge.md`: the main orchestrator that routes work and selects the workflow
-- `forge-explore.md`: inspects the repository and captures what already exists, its current state, and relevant intersections with the rest of the codebase
-- `forge-spec.md`: produces the source-of-truth spec for code agents, optimized for implementation precision
-- `forge-plan.md`: defines the execution order as building tasks, including expected outcomes for each task
-- `forge-build.md`: executes the approved work and reports implementation and validation outcomes
+- `forge-explore.md`: inspects the repository and captures what already exists, its current state, and relevant intersections with the rest of the codebase in `explore.md`
+- `forge-spec.md`: produces the product/functional source of truth in `spec.md`, using numbered `TASK-*` functional requirements for downstream traceability
+- `forge-tech.md`: produces the technical implementation definition in `tech.md`, defining one or more technical implementations for the spec's `TASK-*` requirements and linking each definition to its parent functional `TASK-*`
+- `forge-plan.md`: defines the execution order in `plan.md` from the approved spec and tech artifacts without redefining technical design
+- `forge-build.md`: executes the approved work and reports implementation and validation outcomes in `build-log.md`
 
 ## Installation
 
@@ -135,5 +153,6 @@ Delete these files from your OpenCode agents directory:
 - `forge.md`
 - `forge-explore.md`
 - `forge-spec.md`
+- `forge-tech.md`
 - `forge-plan.md`
 - `forge-build.md`
