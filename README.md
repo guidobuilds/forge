@@ -12,7 +12,7 @@ It is actively shaped by hands-on usage, and there is no guarantee that developm
 
 ## What Forge Is
 
-Forge is an OpenCode-oriented workflow framework built around one orchestrator and five phase agents.
+Forge is an OpenCode-oriented workflow framework built around one orchestrator, five phase agents, and one helper agent.
 
 It is designed to:
 - reduce ambiguity before implementation
@@ -42,6 +42,9 @@ Phase responsibilities:
 - `plan`: execution order using the approved spec + tech artifacts, without redefining technical design
 - `build`: implementation plus validation reporting
 
+Operational helper responsibilities:
+- `helper`: non-development execution tasks that support the orchestrator, such as git commit or git push, without writing code or implementing features
+
 Important: a successful `plan` phase does not automatically authorize `build`. Forge should stop after planning and ask for explicit user approval before implementation unless the user already clearly approved implementation in the same request.
 
 For smaller and clearer changes, Forge can use shorter paths such as:
@@ -68,7 +71,7 @@ Forge phases use a stable artifact convention under `.forge/<feature-slug>/`:
 
 ## Agents
 
-Forge installs six OpenCode agent definition files:
+Forge installs seven OpenCode agent definition files:
 
 - `forge.md`: the main orchestrator that routes work and selects the workflow
 - `forge-explore.md`: inspects the repository and captures what already exists, its current state, and relevant intersections with the rest of the codebase in `explore.md`
@@ -76,6 +79,7 @@ Forge installs six OpenCode agent definition files:
 - `forge-tech.md`: produces the technical implementation definition in `tech.md`, defining one or more technical implementations for the spec's `TASK-*` requirements and linking each definition to its parent functional `TASK-*`
 - `forge-plan.md`: defines the execution order in `plan.md` from the approved spec and tech artifacts without redefining technical design
 - `forge-build.md`: executes the approved work and reports implementation and validation outcomes in `build-log.md`
+- `forge-helper.md`: executes non-development operational tasks for the orchestrator, such as commit/push, without doing code implementation
 
 ## Installation
 
@@ -156,3 +160,4 @@ Delete these files from your OpenCode agents directory:
 - `forge-tech.md`
 - `forge-plan.md`
 - `forge-build.md`
+- `forge-helper.md`
