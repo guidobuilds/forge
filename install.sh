@@ -2,14 +2,17 @@
 
 set -eu
 
-DEST_DIR=${XDG_CONFIG_HOME:-"$HOME/.config"}/opencode/agents
+AGENTS_DEST_DIR=${XDG_CONFIG_HOME:-"$HOME/.config"}/opencode/agents
+SKILLS_DEST_DIR=${XDG_CONFIG_HOME:-"$HOME/.config"}/opencode/skills
 MANIFEST_NAME=install-manifest.env
 BOOTSTRAP_MANIFEST_URL=${FORGE_MANIFEST_URL:-"https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/$MANIFEST_NAME"}
+LEGACY_AGENTS="forge-spec.md forge-tech.md"
 
 OWNER=
 REPO=
 DEFAULT_REF=
 AGENTS=
+SKILLS=
 SELECTED_REF=
 RAW_BASE_URL=
 
@@ -42,6 +45,7 @@ load_manifest() {
   REPO=
   DEFAULT_REF=
   AGENTS=
+  SKILLS=
 
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in
@@ -56,6 +60,7 @@ load_manifest() {
           REPO) REPO=$value ;;
           DEFAULT_REF) DEFAULT_REF=$value ;;
           AGENTS) AGENTS=$value ;;
+          SKILLS) SKILLS=$value ;;
         esac
         ;;
       *)
@@ -68,6 +73,7 @@ load_manifest() {
   [ -n "$REPO" ] || err "Missing REPO in $manifest_path"
   [ -n "$DEFAULT_REF" ] || err "Missing DEFAULT_REF in $manifest_path"
   [ -n "$AGENTS" ] || err "Missing AGENTS in $manifest_path"
+  [ -n "$SKILLS" ] || err "Missing SKILLS in $manifest_path"
 }
 
 SCRIPT_PATH=
@@ -80,11 +86,13 @@ fi
 LOCAL_MODE=false
 LOCAL_MANIFEST=
 LOCAL_AGENTS_DIR=
+LOCAL_SKILLS_DIR=
 
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$MANIFEST_NAME" ] && [ -d "$SCRIPT_DIR/agents" ]; then
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$MANIFEST_NAME" ] && [ -d "$SCRIPT_DIR/agents" ] && [ -d "$SCRIPT_DIR/skills" ]; then
   LOCAL_MODE=true
   LOCAL_MANIFEST=$SCRIPT_DIR/$MANIFEST_NAME
   LOCAL_AGENTS_DIR=$SCRIPT_DIR/agents
+  LOCAL_SKILLS_DIR=$SCRIPT_DIR/skills
 fi
 
 TMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t forge-install)
@@ -106,13 +114,14 @@ load_manifest "$MANIFEST_PATH"
 SELECTED_REF=${FORGE_REF:-$DEFAULT_REF}
 RAW_BASE_URL="https://raw.githubusercontent.com/$OWNER/$REPO/$SELECTED_REF"
 
-mkdir -p "$DEST_DIR"
+mkdir -p "$AGENTS_DEST_DIR" "$SKILLS_DEST_DIR"
 
 for file in $AGENTS; do
   [ -n "$file" ] || err "Encountered empty agent entry in $MANIFEST_PATH"
 
   staged_path=$TMP_DIR/$file
-  destination_path=$DEST_DIR/$file
+  destination_path=$AGENTS_DEST_DIR/$file
+  mkdir -p "$(dirname -- "$staged_path")" "$(dirname -- "$destination_path")"
 
   if [ "$LOCAL_MODE" = true ]; then
     source_path=$LOCAL_AGENTS_DIR/$file
@@ -126,4 +135,31 @@ for file in $AGENTS; do
   mv -f "$staged_path" "$destination_path" || err "Failed to install $destination_path"
 done
 
-printf 'Installed Forge agents to %s\n' "$DEST_DIR"
+for file in $SKILLS; do
+  [ -n "$file" ] || err "Encountered empty skill entry in $MANIFEST_PATH"
+
+  staged_path=$TMP_DIR/$file
+  destination_path=$SKILLS_DEST_DIR/$file
+  mkdir -p "$(dirname -- "$staged_path")" "$(dirname -- "$destination_path")"
+
+  if [ "$LOCAL_MODE" = true ]; then
+    source_path=$LOCAL_SKILLS_DIR/$file
+    [ -f "$source_path" ] || err "Missing required source file: $source_path"
+    cp "$source_path" "$staged_path"
+  else
+    source_url=$RAW_BASE_URL/skills/$file
+    fetch_to_file "$source_url" "$staged_path"
+  fi
+
+  mv -f "$staged_path" "$destination_path" || err "Failed to install $destination_path"
+done
+
+for file in $LEGACY_AGENTS; do
+  legacy_path=$AGENTS_DEST_DIR/$file
+  if [ -f "$legacy_path" ]; then
+    rm -f "$legacy_path" || err "Failed to remove obsolete agent $legacy_path"
+  fi
+done
+
+printf 'Installed Forge agents to %s\n' "$AGENTS_DEST_DIR"
+printf 'Installed Forge skills to %s\n' "$SKILLS_DEST_DIR"

@@ -41,7 +41,8 @@ Expected content:
 - Codepaths, modules, systems, and docs that intersect with the work.
 - Intersections with other features or application areas that may be affected.
 - Constraints, risks, and notable unknowns.
-- Open decisions that materially impact specification or planning.
+- Critical decisions that materially block design.
+- Non-critical unknowns that can be decided later without invalidating the design.
 
 The file may reference repository files, symbols, commands, or include concise diagrams when useful to explain behavior or relationships.
 
@@ -56,7 +57,7 @@ ARTIFACTS:
 - .forge/<feature-slug>/explore.md
 SUMMARY:
 - <brief point>
-NEXT_RECOMMENDED: spec
+NEXT_RECOMMENDED: design
 RISKS:
 - <risk or None>
 QUESTIONS:
