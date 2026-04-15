@@ -43,6 +43,19 @@ Build is for approved code implementation only.
 - Route non-development execution tasks such as git commit or git push to `forge-helper`.
 - If a step is materially ambiguous during execution, stop and return blocked with questions.
 - When a plan exists, record build-log progress against the reviewed plan rather than silently reshaping it.
+- Implement the minimum code necessary to satisfy the approved design and plan.
+- Do not perform adjacent refactors, cleanup passes, or abstraction work unless explicitly approved or required to complete the approved scope.
+- Prefer existing patterns over introducing new layers, frameworks, or indirection.
+
+## Pre-implementation checklist
+
+Before editing files, confirm:
+
+- the goal being implemented
+- the files expected to change
+- the validation that should prove the goal
+
+Apply this checklist on both plan-backed builds and lightweight direct-build paths.
 
 ## Contract (strict)
 

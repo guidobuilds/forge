@@ -65,6 +65,11 @@ Expected content:
 - Do not turn `design.md` into an execution checklist; sequencing belongs in `plan.md`.
 - Use reasonable defaults only for non-critical details.
 - Do not write `design.md` with unresolved critical decisions.
+- Prefer the simplest design that satisfies the requested outcome and acceptance checks.
+- Avoid speculative abstractions or new indirection unless the request or current architecture requires them.
+- Record the important tradeoffs and defaults that downstream planning and build must preserve.
+- Escalate only decisions that materially change behavior, scope, interface, or technical shape.
+- If a heavier alternative was considered and rejected because it would expand scope or complexity, note that briefly when it helps preserve the approved shape.
 
 ## Phase intent
 

@@ -10,6 +10,24 @@ Apply the Forge operating model from the orchestrator.
 
 Forge is a thin orchestrator over durable markdown artifacts, minimal phase agents, and explicit approval gates.
 
+## Operating principles
+
+Apply these rules before choosing or invoking any phase:
+
+- **Think before coding**: translate the request into the goal, constraints, assumptions, unknowns, and safest workflow before delegating work that creates artifacts or code.
+- **Simplicity first**: prefer the lightest safe workflow and the smallest viable change. Do not optimize for elegance, completeness, or abstraction beyond the request.
+- **Surgical changes**: keep scope local, touch only files likely required for the requested outcome, and do not bundle adjacent cleanup or refactors unless explicitly requested or required.
+- **Goal-driven execution**: define the intended outcome and expected verification up front so downstream phases can plan and report against it.
+
+## Shared definitions
+
+- **Goal**: the concrete outcome the user wants.
+- **Constraints**: non-goals, approval limits, scope boundaries, or system limits that must remain true.
+- **Assumption**: a working belief used to proceed when the repo or request suggests it is safe.
+- **Unknown**: missing information that may matter but is not yet proven.
+- **Tradeoff**: a deliberate choice between viable options that changes complexity, scope, or behavior.
+- **Verification**: the check that will show whether the requested outcome was actually achieved.
+
 ## Default flow
 
 ```text
@@ -40,14 +58,22 @@ You may skip `design` and/or `plan` only when all of the following are true:
 - no meaningful product or technical design decisions are needed
 - the blast radius is low and cross-system coordination is not required
 
+Before using a lightweight path, restate internally:
+- target goal
+- constraints and non-goals
+- minimum intended verification
+
 If unsure, start with `explore`.
 
 ## Routing rules
 
 - Never do phase work inline.
+- Translate the request into goal, constraints, and safest workflow before delegating.
 - Delegate development work to the Forge phase agents.
 - Route non-development operational tasks such as git commit or git push to `forge-helper`.
 - Keep one thin thread with the user.
+- If a simpler safe path exists, prefer it over a heavier workflow.
+- Do not let downstream phases silently infer missing build-shaping goals.
 
 ## Design gate
 
@@ -64,6 +90,7 @@ If unsure, start with `explore`.
 - If `.forge/<feature-slug>/plan.md` exists, require explicit user approval before invoking `forge-build`.
 - Treat `NEXT_RECOMMENDED: build` as phase readiness only.
 - Direct `build` without a plan is allowed only for lightweight requests that are already clear and approved to implement.
+- Approval to clarify, explore, design, or plan is not approval to build.
 
 ## Canonical artifacts
 

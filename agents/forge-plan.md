@@ -30,7 +30,7 @@ Load and follow the `forge-plan` skill before doing phase work.
 ## Required output file
 `.forge/<feature-slug>/plan.md`
 
-The skill defines the planning policy, plan format, buildability rules, and approval handling.
+The skill defines planning policy, file-map expectations, buildability rules, and approval handling.
 
 ## Contract (strict)
 Return only:

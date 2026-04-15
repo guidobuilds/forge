@@ -34,7 +34,7 @@ Build is for approved code implementation only.
 ## Required output file
 `.forge/<feature-slug>/build-log.md`
 
-The skill defines critical plan review, scope control, approval handling, validation, and build-log expectations.
+The skill defines critical plan review, minimum-change implementation discipline, approval handling, validation, and build-log expectations.
 
 ## Contract (strict)
 Return only:

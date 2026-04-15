@@ -51,6 +51,11 @@ The plan must not include:
 - A completed plan does not authorize implementation by itself.
 - Default to `NEXT_RECOMMENDED: plan` when the plan is ready but waiting for user approval to build.
 - Return `NEXT_RECOMMENDED: build` only when the orchestrator prompt explicitly states that the user has already approved implementation.
+- Keep tasks surgically scoped to the approved goal; optional cleanup belongs outside the plan unless explicitly requested.
+- The file map must justify why each listed file or module is expected to be touched.
+- Prefer existing patterns and minimum necessary changes over broader structural rewrites.
+- Each task must include minimal verification tied to the requested goal, not just a generic test step.
+- If execution would require guesswork about assumptions, unknowns, or missing dependencies, stop and block instead of padding the plan with placeholders.
 
 ## Contract (strict)
 

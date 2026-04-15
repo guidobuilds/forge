@@ -30,7 +30,7 @@ Load and follow the `forge-design` skill before doing phase work.
 ## Required output file
 `.forge/<feature-slug>/design.md`, but only after the clarification gate is closed.
 
-If critical design decisions are still open, return blocked, ask the smallest useful batch of questions with explicit recommendations, and do not write `design.md` yet.
+The skill defines the clarification gate, design rules, and `design.md` structure.
 
 ## Contract (strict)
 Return only:

@@ -44,10 +44,6 @@ Phase responsibilities:
 Operational helper responsibilities:
 - `helper`: non-development execution tasks that support the orchestrator, such as git commit or git push, without writing code or implementing features
 
-Important: a successful `plan` phase does not automatically authorize `build`. Forge should stop after planning and ask for explicit user approval before implementation unless the user already clearly approved implementation in the same request.
-
-Important: `design` includes an internal clarification gate. If critical decisions are still open after exploration, Forge stays in `design`, asks only the smallest useful batch of questions with explicit recommendations, and does not write `design.md` until those decisions are resolved.
-
 For smaller and clearer changes, Forge can use shorter paths such as:
 
 ```text
@@ -56,9 +52,17 @@ explore -> build -> done
 build -> done
 ```
 
-The shortened paths still follow the same approval rule: `plan -> build` requires explicit user approval, while direct `build` is reserved for lightweight, tightly bounded requests that are already clear enough to implement safely.
+The exact routing, approval, and clarification rules live in the canonical skills rather than this README. This document stays descriptive so policy can evolve in one place.
 
-The idea is simple: use the lightest workflow that still gives enough clarity and safety.
+## Operating Principles
+
+Forge is designed around four simple principles:
+- think before coding
+- prefer the simplest viable change
+- keep changes surgical and local
+- define goals and verification before execution
+
+These principles are enforced by the skills that own Forge behavior.
 
 ## Canonical Artifacts
 
@@ -85,11 +89,30 @@ Forge installs six OpenCode agent definition files:
 Forge installs reusable markdown skills that hold the canonical operating knowledge for the framework:
 
 - `using-forge`: workflow selection, routing, artifact conventions, and approval rules
+- `forge-explore`: exploration rigor, assumptions/unknowns/tradeoffs capture, and escalation rules
 - `forge-design`: design-gate policy, question quality, and `design.md` structure
 - `forge-plan`: planning policy, file map, buildability, and `plan.md` expectations
 - `forge-build`: plan review, build-phase scope, approval, validation, and `build-log.md` expectations
+- `forge-helper`: bounded helper execution and confirmation rules
 
 These skills are internal Forge assets, not plugins.
+
+## Policy Ownership Map
+
+Behavioral policy is intentionally centralized:
+
+| Concern | Canonical owner |
+| --- | --- |
+| Shared workflow, operating principles, approval semantics | `skills/using-forge/SKILL.md` |
+| Explore-phase rigor and artifact shape | `skills/forge-explore/SKILL.md` |
+| Design clarification gate and design quality rules | `skills/forge-design/SKILL.md` |
+| Planning, task slicing, and verification planning | `skills/forge-plan/SKILL.md` |
+| Build discipline and validation reporting | `skills/forge-build/SKILL.md` |
+| Helper scope and operational confirmations | `skills/forge-helper/SKILL.md` |
+| Agent contracts and execution wrappers | `agents/*.md` |
+| User-facing overview and installation docs | `README.md` |
+
+In short: skills own behavioral policy, agents stay thin, and the README describes the system without re-specifying the full rules.
 
 ## Installation
 
@@ -178,9 +201,11 @@ Delete these files from your OpenCode agents directory:
 Delete these skill files from your OpenCode skills directory:
 
 - `using-forge/SKILL.md`
+- `forge-explore/SKILL.md`
 - `forge-design/SKILL.md`
 - `forge-plan/SKILL.md`
 - `forge-build/SKILL.md`
+- `forge-helper/SKILL.md`
 
 If you still have an older Forge installation, also remove these legacy agent files if present:
 
