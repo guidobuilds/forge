@@ -1,136 +1,83 @@
 # Forge
 
-Forge is a personal project for building and learning about code agents, focused on OpenCode.
+Forge is a personal project for working with code agents more reliably.
 
-Its goal is to help people get better results when working with code agents by providing a structured workflow, durable markdown artifacts, and a small set of specialized agents plus reusable skills.
+It started as a way to get better results from OpenCode, and now also supports Codex and Claude Code. The idea is to give agents a lightweight operating model for turning vague software requests into smaller, safer, verifiable changes without adding a heavy process around them.
 
-## Status
+Forge is experimental. It is shaped by hands-on use, and the workflow may change as I learn what works and what does not.
 
-Forge is experimental.
+## Why It Exists
 
-It is actively shaped by hands-on usage, and there is no guarantee that development will continue or that the workflow will remain stable over time.
+Code agents are useful, but they often fail in predictable ways: they start coding too early, lose context between steps, overbuild, or make changes without a clear verification path.
 
-## What Forge Is
+Forge is my attempt to make that work more disciplined:
 
-Forge is an OpenCode-oriented workflow framework built around one orchestrator, four phase agents, one helper agent, and reusable skills.
+- clarify intent before implementation when it matters
+- choose the smallest safe workflow for each request
+- keep long-running context in durable project notes
+- separate orchestration from execution
+- make verification part of the work, not an afterthought
 
-It is designed to:
-- reduce ambiguity before implementation
-- keep agent behavior structured and repeatable
-- keep durable context in markdown artifacts under `.forge/`
+Forge is intentionally minimal. It is not a plugin marketplace, a new IDE, or a replacement for your agent. It is just a small workflow layer for getting agents to pause, inspect, plan when needed, and verify their work.
 
-Forge is not a plugin platform.
+## What It Does
 
-It is a an operating model for running code agents more effectively while staying minimal.
+Forge adds a structured agent workflow for:
+
+- inspect an existing codebase before making changes
+- produce design notes for ambiguous or high-risk work
+- turn approved direction into an executable plan
+- implement focused changes with a minimum-change bias
+- run or document validation after implementation
+- preserve important decisions and follow-ups under `.forge/`
+
+For simple requests, Forge should stay out of the way and take the shortest safe path. For larger changes, it can slow the process down just enough to reduce rework and bad assumptions.
 
 ## How It Works
 
-Forge uses a phased workflow.
+Forge uses a thin orchestrator and a single worker model.
 
-The main agent, `forge`, acts as the orchestrator. It decides which path is appropriate for the request and delegates the actual phase work to specialized subagents.
+The orchestrator decides how much process a request needs. The worker does the actual inspection, design, planning, building, operating, or verification work. This keeps the user conversation focused while still giving the agent a repeatable execution pattern.
 
-Standard flow:
-
-```text
-explore -> design -> plan -> build -> done
-```
-
-Phase responsibilities:
-- `explore`: what exists
-- `design`: close critical decisions first, then capture what should change and the intended technical shape in one artifact
-- `plan`: execution order derived from the approved design, without redefining it
-- `build`: implementation plus validation reporting
-
-Operational helper responsibilities:
-- `helper`: non-development execution tasks that support the orchestrator, such as git commit or git push, without writing code or implementing features
-
-For smaller and clearer changes, Forge can use shorter paths such as:
+Typical routes include:
 
 ```text
-explore -> plan -> build -> done
-explore -> build -> done
-build -> done
+inspect -> build -> verify
+inspect -> design -> plan -> build -> verify
+build -> verify
 ```
 
-The exact routing, approval, and clarification rules live in the canonical skills rather than this README. This document stays descriptive so policy can evolve in one place.
+There is no mandatory lifecycle. Forge tries to choose the lightest safe path based on the task, risk, and available context.
 
-## Operating Principles
+## Durable Context
 
-Forge is designed around four simple principles:
-- think before coding
-- prefer the simplest viable change
-- keep changes surgical and local
-- define goals and verification before execution
+When a task benefits from persistent context, Forge writes notes under `.forge/<feature-slug>/`.
 
-These principles are enforced by the skills that own Forge behavior.
+These notes are useful for:
 
-## Canonical Artifacts
+- resuming work across agent sessions
+- reviewing the reasoning behind a change
+- keeping implementation aligned with approved decisions
+- making follow-up work easier to delegate
 
-Forge phases use a stable artifact convention under `.forge/<feature-slug>/`:
+Small, obvious changes do not need ceremony. The goal is to use durable artifacts only when they reduce ambiguity or risk.
 
-- `explore.md`: what exists
-- `design.md`: merged product and technical design, with stable `TASK-*` requirements and a concise `Decision Log` for critical design decisions resolved during clarification
-- `plan.md`: execution order derived from the approved design, without restating it
-- `build-log.md`: implementation record, validation performed, and any deviations or follow-ups
+## Supported Agents
 
-## Agents
+Forge currently installs support for:
 
-Forge installs six OpenCode agent definition files:
+- OpenCode
+- Codex
+- Claude Code
 
-- `forge.md`: the main orchestrator that routes work and selects the workflow
-- `forge-explore.md`: inspects the repository and captures what already exists, its current state, and relevant intersections with the rest of the codebase in `explore.md`
-- `forge-design.md`: closes critical design questions and then produces the canonical `design.md` artifact
-- `forge-plan.md`: defines the execution order in `plan.md` from the approved design artifact, with a concrete file map and buildable tasks
-- `forge-build.md`: executes the approved work, reviews plans critically before implementation, and reports implementation and validation outcomes in `build-log.md`
-- `forge-helper.md`: executes non-development operational tasks for the orchestrator, such as commit or push, without doing code implementation
-
-## Skills
-
-Forge installs reusable markdown skills that hold the canonical operating knowledge for the framework:
-
-- `using-forge`: workflow selection, routing, artifact conventions, and approval rules
-- `forge-explore`: exploration rigor, assumptions/unknowns/tradeoffs capture, and escalation rules
-- `forge-design`: design-gate policy, question quality, and `design.md` structure
-- `forge-plan`: planning policy, file map, buildability, and `plan.md` expectations
-- `forge-build`: plan review, build-phase scope, approval, validation, and `build-log.md` expectations
-- `forge-helper`: bounded helper execution and confirmation rules
-
-These skills are internal Forge assets, not plugins.
-
-## Policy Ownership Map
-
-Behavioral policy is intentionally centralized:
-
-| Concern | Canonical owner |
-| --- | --- |
-| Shared workflow, operating principles, approval semantics | `skills/using-forge/SKILL.md` |
-| Explore-phase rigor and artifact shape | `skills/forge-explore/SKILL.md` |
-| Design clarification gate and design quality rules | `skills/forge-design/SKILL.md` |
-| Planning, task slicing, and verification planning | `skills/forge-plan/SKILL.md` |
-| Build discipline and validation reporting | `skills/forge-build/SKILL.md` |
-| Helper scope and operational confirmations | `skills/forge-helper/SKILL.md` |
-| Agent contracts and execution wrappers | `agents/*.md` |
-| User-facing overview and installation docs | `README.md` |
-
-In short: skills own behavioral policy, agents stay thin, and the README describes the system without re-specifying the full rules.
+The same operating model is shared across all supported agents so the workflow stays mostly consistent even when the underlying tool changes.
 
 ## Installation
 
-Forge installs the managed agent files and skill files into your OpenCode configuration directories by fetching them from `raw.githubusercontent.com`.
-
-Default ref: `main`
-
-### macOS / Linux
+### macOS and Linux
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | bash
-```
-
-Installed to:
-
-```text
-${XDG_CONFIG_HOME:-$HOME/.config}/opencode/agents
-${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills
 ```
 
 ### Windows
@@ -139,40 +86,13 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills
 powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.ps1').Content))"
 ```
 
-Installed to:
+Re-run the installer at any time to update Forge in place.
 
-```text
-$env:APPDATA\opencode\agents
-$env:APPDATA\opencode\skills
-```
+## Install From A Specific Ref
 
-## Updating
+Use `FORGE_REF` to install a branch, tag, or other ref.
 
-Re-run the installer to overwrite the managed Forge agent and skill files in place.
-
-The installer also removes the obsolete legacy agents `forge-spec.md` and `forge-tech.md` if they are still present from an older installation.
-
-## Local Checkout Fallback
-
-If you are developing locally or prefer running from a checkout, these commands remain supported:
-
-### macOS / Linux
-
-```sh
-sh install.sh
-```
-
-### Windows
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-## Optional Ref Override
-
-The installers use `main` by default.
-
-### macOS / Linux
+### macOS and Linux
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | FORGE_REF=<ref> bash
@@ -185,29 +105,60 @@ $env:FORGE_REF = '<ref>'
 powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.ps1').Content))"
 ```
 
-Clear `FORGE_REF` afterward if you do not want it to affect later runs.
+## Local Development
 
-## Uninstall
+From a local checkout:
 
-Delete these files from your OpenCode agents directory:
+```sh
+bash install.sh
+```
 
-- `forge.md`
-- `forge-explore.md`
-- `forge-design.md`
-- `forge-plan.md`
-- `forge-build.md`
-- `forge-helper.md`
+To force installation from the local files instead of downloading from GitHub:
 
-Delete these skill files from your OpenCode skills directory:
+```sh
+bash scripts/install.sh
+```
 
-- `using-forge/SKILL.md`
-- `forge-explore/SKILL.md`
-- `forge-design/SKILL.md`
-- `forge-plan/SKILL.md`
-- `forge-build/SKILL.md`
-- `forge-helper/SKILL.md`
+On Windows:
 
-If you still have an older Forge installation, also remove these legacy agent files if present:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
 
-- `forge-spec.md`
-- `forge-tech.md`
+## Updating
+
+Run the installer again:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | bash
+```
+
+Forge replaces its managed agent and skill definitions in your supported agent configuration directories.
+
+## Uninstalling
+
+Remove Forge from the agent configuration directories for OpenCode, Codex, or Claude Code by deleting the installed Forge agent and skill entries.
+
+If you installed Forge for multiple tools, repeat the removal for each one you no longer want to use.
+
+## Project Status
+
+Forge is experimental and personal.
+
+There is no promise that the workflow will stay stable or that every agent/tool combination will keep working the same way. I am using it, changing it, and keeping the parts that make agent work better in practice.
+
+Feedback, issues, and pull requests are welcome, especially when they come from real usage.
+
+## Contributing
+
+Forge is open source and contributions are welcome.
+
+Good contributions tend to improve one of these areas:
+
+- clearer agent behavior
+- safer routing and approval rules
+- better installation and update experience
+- sharper documentation
+- examples from real code-agent workflows
+
+Please keep changes small, practical, and aligned with Forge's core bias: the lightest safe workflow and the smallest viable change.

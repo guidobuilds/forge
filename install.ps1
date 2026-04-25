@@ -1,183 +1,72 @@
-param(
-    [string]$Ref = $env:FORGE_REF,
-    [string]$ManifestUrl = $env:FORGE_MANIFEST_URL
-)
-
 $ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
 
-$ManifestName = 'install-manifest.env'
-$LegacyAgents = @('forge-spec.md', 'forge-tech.md')
-if (-not $ManifestUrl) {
-    $ManifestUrl = "https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/$ManifestName"
+$ForgeRepo = if ($env:FORGE_REPO) { $env:FORGE_REPO } else { 'guidobuilds/forge' }
+$ForgeRef = if ($env:FORGE_REF) { $env:FORGE_REF } else { 'main' }
+$RawBase = "https://raw.githubusercontent.com/$ForgeRepo/refs/heads/$ForgeRef"
+
+$AgentFiles = @('forge.md', 'forge-worker.md')
+$SkillDirs = @('using-forge', 'forge-worker', 'forge-explore', 'forge-design', 'forge-plan', 'forge-build', 'forge-helper')
+
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { '' }
+
+function Test-LocalSources {
+    return ($ScriptDir -and (Test-Path -LiteralPath (Join-Path $ScriptDir 'agents') -PathType Container) -and (Test-Path -LiteralPath (Join-Path $ScriptDir 'skills') -PathType Container))
 }
 
-function Get-ForgeManifest {
+function Copy-OrFetchFile {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestPath
     )
 
-    $manifest = @{}
+    $DestParent = Split-Path -Parent $DestPath
+    New-Item -ItemType Directory -Force -Path $DestParent | Out-Null
 
-    foreach ($line in Get-Content -LiteralPath $Path) {
-        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) {
-            continue
-        }
-
-        $parts = $line -split '=', 2
-        if ($parts.Count -ne 2) {
-            throw "Invalid manifest entry in $Path`: $line"
-        }
-
-        $manifest[$parts[0]] = $parts[1]
+    $LocalPath = if ($ScriptDir) { Join-Path $ScriptDir $SourcePath } else { '' }
+    if ((Test-LocalSources) -and (Test-Path -LiteralPath $LocalPath -PathType Leaf)) {
+        Copy-Item -LiteralPath $LocalPath -Destination $DestPath -Force
+    } else {
+        Invoke-WebRequest -UseBasicParsing "$RawBase/$SourcePath" -OutFile $DestPath
     }
-
-    foreach ($key in 'OWNER', 'REPO', 'DEFAULT_REF', 'AGENTS', 'SKILLS') {
-        if (-not $manifest.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($manifest[$key])) {
-            throw "Missing $key in $Path"
-        }
-    }
-
-    return $manifest
 }
 
-function Save-ForgeDownload {
+function Clear-ForgeDestination {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$Url,
-        [Parameter(Mandatory = $true)]
-        [string]$Destination
+        [Parameter(Mandatory = $true)][string]$AgentsDir,
+        [Parameter(Mandatory = $true)][string]$SkillsDir
     )
 
-    try {
-        Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing | Out-Null
-    }
-    catch {
-        throw "Failed to download $Url. $($_.Exception.Message)"
-    }
+    New-Item -ItemType Directory -Force -Path $AgentsDir, $SkillsDir | Out-Null
+
+    Get-ChildItem -LiteralPath $AgentsDir -Filter 'forge*.md' -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -LiteralPath $SkillsDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'forge*' -or $_.Name -eq 'using-forge' } | Remove-Item -Recurse -Force
 }
 
-function Install-ForgeManagedFiles {
+function Install-ForgeTo {
     param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$Files,
-        [Parameter(Mandatory = $true)]
-        [string]$SourceDirName,
-        [Parameter(Mandatory = $true)]
-        [string]$DestinationRoot,
-        [string]$LocalSourceRoot,
-        [Parameter(Mandatory = $true)]
-        [string]$RawBaseUrl,
-        [Parameter(Mandatory = $true)]
-        [string]$TempDir,
-        [Parameter(Mandatory = $true)]
-        [bool]$UseLocalSources
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$AgentsDir,
+        [Parameter(Mandatory = $true)][string]$SkillsDir
     )
 
-    foreach ($file in $Files) {
-        $stagedPath = Join-Path $TempDir $file
-        $stagedDir = Split-Path -Parent $stagedPath
-        if ($stagedDir) {
-            New-Item -ItemType Directory -Path $stagedDir -Force | Out-Null
-        }
+    Clear-ForgeDestination -AgentsDir $AgentsDir -SkillsDir $SkillsDir
 
-        if ($UseLocalSources) {
-            $sourcePath = Join-Path $LocalSourceRoot $file
-            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-                throw "Missing required source file: $sourcePath"
-            }
-
-            Copy-Item -LiteralPath $sourcePath -Destination $stagedPath -Force
-        }
-        else {
-            $sourceUrl = "$RawBaseUrl/$SourceDirName/$file"
-            Save-ForgeDownload -Url $sourceUrl -Destination $stagedPath
-        }
-
-        $destinationPath = Join-Path $DestinationRoot $file
-        $destinationDir = Split-Path -Parent $destinationPath
-        if ($destinationDir) {
-            New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
-        }
-
-        Move-Item -LiteralPath $stagedPath -Destination $destinationPath -Force
+    foreach ($Agent in $AgentFiles) {
+        Copy-OrFetchFile -SourcePath "agents/$Agent" -DestPath (Join-Path $AgentsDir $Agent)
     }
+
+    foreach ($Skill in $SkillDirs) {
+        Copy-OrFetchFile -SourcePath "skills/$Skill/SKILL.md" -DestPath (Join-Path (Join-Path $SkillsDir $Skill) 'SKILL.md')
+    }
+
+    Write-Host "Installed Forge for ${Name}:"
+    Write-Host "  $AgentsDir"
+    Write-Host "  $SkillsDir"
 }
 
-$ScriptPath = $MyInvocation.MyCommand.Path
-$ScriptDir = $null
-if ($ScriptPath) {
-    $ScriptDir = Split-Path -Parent $ScriptPath
-}
+$AppData = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $HOME 'AppData\Roaming' }
+$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
 
-$LocalMode = $false
-$LocalManifestPath = $null
-$LocalAgentsDir = $null
-$LocalSkillsDir = $null
-if ($ScriptDir) {
-    $candidateManifest = Join-Path $ScriptDir $ManifestName
-    $candidateAgentsDir = Join-Path $ScriptDir 'agents'
-    $candidateSkillsDir = Join-Path $ScriptDir 'skills'
-    if ((Test-Path -LiteralPath $candidateManifest -PathType Leaf) -and (Test-Path -LiteralPath $candidateAgentsDir -PathType Container) -and (Test-Path -LiteralPath $candidateSkillsDir -PathType Container)) {
-        $LocalMode = $true
-        $LocalManifestPath = $candidateManifest
-        $LocalAgentsDir = $candidateAgentsDir
-        $LocalSkillsDir = $candidateSkillsDir
-    }
-}
-
-if (-not $env:APPDATA) {
-    throw 'APPDATA is not set.'
-}
-
-$AgentsDestinationDir = Join-Path $env:APPDATA 'opencode\agents'
-$SkillsDestinationDir = Join-Path $env:APPDATA 'opencode\skills'
-$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("forge-install-" + [System.Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
-
-try {
-    $ManifestPath = Join-Path $TempDir $ManifestName
-
-    if ($LocalMode) {
-        Copy-Item -LiteralPath $LocalManifestPath -Destination $ManifestPath -Force
-    }
-    else {
-        Save-ForgeDownload -Url $ManifestUrl -Destination $ManifestPath
-    }
-
-    $Manifest = Get-ForgeManifest -Path $ManifestPath
-    $SelectedRef = if ($Ref) { $Ref } else { $Manifest['DEFAULT_REF'] }
-    $RawBaseUrl = "https://raw.githubusercontent.com/$($Manifest['OWNER'])/$($Manifest['REPO'])/$SelectedRef"
-    $ManagedAgents = $Manifest['AGENTS'] -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    $ManagedSkills = $Manifest['SKILLS'] -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-    if ($ManagedAgents.Count -eq 0) {
-        throw "Missing agent entries in $ManifestPath"
-    }
-
-    if ($ManagedSkills.Count -eq 0) {
-        throw "Missing skill entries in $ManifestPath"
-    }
-
-    New-Item -ItemType Directory -Path $AgentsDestinationDir -Force | Out-Null
-    New-Item -ItemType Directory -Path $SkillsDestinationDir -Force | Out-Null
-
-    Install-ForgeManagedFiles -Files $ManagedAgents -SourceDirName 'agents' -DestinationRoot $AgentsDestinationDir -LocalSourceRoot $LocalAgentsDir -RawBaseUrl $RawBaseUrl -TempDir $TempDir -UseLocalSources $LocalMode
-    Install-ForgeManagedFiles -Files $ManagedSkills -SourceDirName 'skills' -DestinationRoot $SkillsDestinationDir -LocalSourceRoot $LocalSkillsDir -RawBaseUrl $RawBaseUrl -TempDir $TempDir -UseLocalSources $LocalMode
-
-    foreach ($file in $LegacyAgents) {
-        $legacyPath = Join-Path $AgentsDestinationDir $file
-        if (Test-Path -LiteralPath $legacyPath -PathType Leaf) {
-            Remove-Item -LiteralPath $legacyPath -Force
-        }
-    }
-
-    Write-Host "Installed Forge agents to $AgentsDestinationDir"
-    Write-Host "Installed Forge skills to $SkillsDestinationDir"
-}
-finally {
-    if (Test-Path -LiteralPath $TempDir) {
-        Remove-Item -LiteralPath $TempDir -Recurse -Force
-    }
-}
+Install-ForgeTo -Name 'OpenCode' -AgentsDir (Join-Path $AppData 'opencode\agents') -SkillsDir (Join-Path $AppData 'opencode\skills')
+Install-ForgeTo -Name 'Codex' -AgentsDir (Join-Path $AppData 'codex\agents') -SkillsDir (Join-Path $AppData 'codex\skills')
+Install-ForgeTo -Name 'Claude Code' -AgentsDir (Join-Path $UserHome '.claude\agents') -SkillsDir (Join-Path $UserHome '.claude\skills')
