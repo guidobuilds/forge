@@ -68,5 +68,5 @@ $AppData = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $HOME 'AppData\Ro
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
 
 Install-ForgeTo -Name 'OpenCode' -AgentsDir (Join-Path $AppData 'opencode\agents') -SkillsDir (Join-Path $AppData 'opencode\skills')
-Install-ForgeTo -Name 'Codex' -AgentsDir (Join-Path $AppData 'codex\agents') -SkillsDir (Join-Path $AppData 'codex\skills')
+Install-ForgeTo -Name 'Codex' -AgentsDir (Join-Path $UserHome '.codex\agents') -SkillsDir (Join-Path $UserHome '.codex\skills')
 Install-ForgeTo -Name 'Claude Code' -AgentsDir (Join-Path $UserHome '.claude\agents') -SkillsDir (Join-Path $UserHome '.claude\skills')

@@ -63,5 +63,5 @@ install_to() {
 }
 
 install_to "OpenCode" "$CONFIG_HOME/opencode/agents" "$CONFIG_HOME/opencode/skills"
-install_to "Codex" "$CONFIG_HOME/codex/agents" "$CONFIG_HOME/codex/skills"
+install_to "Codex" "$HOME/.codex/agents" "$HOME/.codex/skills"
 install_to "Claude Code" "$HOME/.claude/agents" "$HOME/.claude/skills"
