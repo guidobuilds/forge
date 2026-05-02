@@ -1,3 +1,5 @@
 .forge/
 workdir/
 .opencode/
+dist/
+node_modules/

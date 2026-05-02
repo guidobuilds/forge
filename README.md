@@ -74,35 +74,36 @@ The same operating model is shared across all supported agents so the workflow s
 
 ## Installation
 
-### macOS and Linux
+The primary installer is the npm CLI:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | bash
+npx @guidobuilds/forge-ai install
 ```
 
-### Windows
+The installer prompts for the target agent platform and whether Forge should be installed globally for your user or locally for the current project.
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.ps1').Content))"
-```
-
-Re-run the installer at any time to update Forge in place.
-
-## Install From A Specific Ref
-
-Use `FORGE_REF` to install a branch, tag, or other ref.
-
-### macOS and Linux
+To update an existing install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | FORGE_REF=<ref> bash
+npx @guidobuilds/forge-ai update
 ```
 
-### Windows
+For non-interactive environments:
 
-```powershell
-$env:FORGE_REF = '<ref>'
-powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.ps1').Content))"
+```sh
+npx @guidobuilds/forge-ai install --platform all --scope user --yes
+```
+
+Preview the files without writing them:
+
+```sh
+npx @guidobuilds/forge-ai install --platform all --scope user --dry-run
+```
+
+Validate a local Forge source tree:
+
+```sh
+npx @guidobuilds/forge-ai validate --source .
 ```
 
 ## Local Development
@@ -110,27 +111,23 @@ powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-We
 From a local checkout:
 
 ```sh
-bash install.sh
+npm install
+npm run build
+node bin/forge-ai.mjs install --source . --platform all --scope user
 ```
 
-To force installation from the local files instead of downloading from GitHub:
+To preview local output without writing:
 
 ```sh
-bash scripts/install.sh
-```
-
-On Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+node bin/forge-ai.mjs install --source . --platform all --scope project --dry-run
 ```
 
 ## Updating
 
-Run the installer again:
+Run the npm updater:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/guidobuilds/forge/refs/heads/main/install.sh | bash
+npx @guidobuilds/forge-ai update
 ```
 
 Forge replaces its managed agent and skill definitions in your supported agent configuration directories.
@@ -148,17 +145,3 @@ Forge is experimental and personal.
 There is no promise that the workflow will stay stable or that every agent/tool combination will keep working the same way. I am using it, changing it, and keeping the parts that make agent work better in practice.
 
 Feedback, issues, and pull requests are welcome, especially when they come from real usage.
-
-## Contributing
-
-Forge is open source and contributions are welcome.
-
-Good contributions tend to improve one of these areas:
-
-- clearer agent behavior
-- safer routing and approval rules
-- better installation and update experience
-- sharper documentation
-- examples from real code-agent workflows
-
-Please keep changes small, practical, and aligned with Forge's core bias: the lightest safe workflow and the smallest viable change.

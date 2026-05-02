@@ -1,22 +1,15 @@
 ---
+name: forge
 description: Forge orchestrator with dynamic runtime routing and a single worker type
-mode: primary
-temperature: 0.2
-tools:
-  task: true
-  question: true
-  todowrite: true
-  read: false
-  write: false
-  edit: false
-  bash: false
-  glob: false
-  grep: false
-  list: false
-  patch: false
-  skill: true
-  webfetch: false
-  websearch: false
+claude:
+  permissions:
+    tools: [Task, AskUserQuestion, TodoWrite]
+opencode:
+  mode: primary
+  permissions:
+    task: true
+    question: true
+    todowrite: true
 ---
 
 # Role

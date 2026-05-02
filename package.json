@@ -1,0 +1,36 @@
+{
+  "name": "@guidobuilds/forge-ai",
+  "version": "0.1.0",
+  "description": "Forge AI framework",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "forge-ai": "bin/forge-ai.mjs"
+  },
+  "files": [
+    "bin",
+    "dist/src",
+    "agents",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:test": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build:test && node --test dist/tests/*.test.js",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.2.0",
+    "picocolors": "^1.1.1"
+  }
+}

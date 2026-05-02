@@ -1,22 +1,23 @@
 ---
+name: forge-worker
 description: Forge universal worker for inspect, design, plan, build, operate, and verify work
-mode: subagent
-temperature: 0.1
-tools:
-  task: false
-  question: false
-  todowrite: true
-  read: true
-  write: true
-  edit: true
-  bash: true
-  glob: true
-  grep: true
-  list: true
-  patch: true
-  skill: true
-  webfetch: true
-  websearch: true
+claude:
+  permissions:
+    tools: [TodoWrite, Read, Write, Edit, Bash, Glob, Grep, LS, MultiEdit, WebFetch]
+opencode:
+  mode: subagent
+  permissions:
+    todowrite: true
+    read: true
+    write: true
+    edit: true
+    bash: true
+    glob: true
+    grep: true
+    list: true
+    patch: true
+    skill: true
+    webfetch: true
 ---
 
 You are the Forge worker.
