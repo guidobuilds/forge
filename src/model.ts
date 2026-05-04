@@ -47,6 +47,7 @@ export type OutputFile = {
   kind: SourceKind;
   name: string;
   path: string;
+  sourcePath: string;
   content: string;
 };
 

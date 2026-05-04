@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import path from 'node:path';
 import { renderClaudeAgent, renderClaudeSkill } from './adapters/claude.js';
 import { renderCodexAgent, renderCodexSkill } from './adapters/codex.js';
 import { renderOpenCodeAgent, renderOpenCodeSkill } from './adapters/opencode.js';
@@ -36,7 +37,7 @@ export async function buildWritePlan(options: ProcessOptions): Promise<WritePlan
   const seenAgents = new Set<string>();
   const seenSkills = new Set<string>();
   for (const source of sources) {
-    const converted = convertSource(source);
+    const converted = convertSource(source, options.source);
     diagnostics.push(...converted.diagnostics);
     if (!converted.item) continue;
     const seen = source.kind === 'agent' ? seenAgents : seenSkills;
@@ -60,7 +61,7 @@ export async function buildWritePlan(options: ProcessOptions): Promise<WritePlan
   return { files, diagnostics, sourceCount: sources.length };
 }
 
-function convertSource(source: SourceItem): { item?: CanonicalAgent | CanonicalSkill; diagnostics: Diagnostic[] } {
+function convertSource(source: SourceItem, sourceRoot: string): { item?: CanonicalAgent | CanonicalSkill; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   const data = source.data;
   const name = typeof data.name === 'string' ? data.name : undefined;
@@ -92,7 +93,7 @@ function convertSource(source: SourceItem): { item?: CanonicalAgent | CanonicalS
   if (!description) diagnostics.push(diagnostic('error', 'MISSING_DESCRIPTION', `${source.kind} description is required`, { sourcePath: source.sourcePath }));
   if (!source.body.trim()) diagnostics.push(diagnostic('error', 'EMPTY_BODY', `${source.kind} body is required`, { sourcePath: source.sourcePath }));
   if (!name || !description || !source.body.trim() || diagnostics.some((item) => item.severity === 'error')) return { diagnostics };
-  const base = { name, description, claude: productConfig(data.claude), opencode: productConfig(data.opencode), codex: productConfig(data.codex) };
+  const base = { name, description, sourcePath: path.relative(path.resolve(sourceRoot), source.sourcePath), claude: productConfig(data.claude), opencode: productConfig(data.opencode), codex: productConfig(data.codex) };
   return { diagnostics, item: source.kind === 'agent' ? { ...base, definition: source.body } : { ...base, instructions: source.body } };
 }
 
@@ -105,7 +106,7 @@ function renderFile(platform: Platform, kind: 'agent' | 'skill', item: Canonical
     ? platform === 'opencode' ? renderOpenCodeAgent(item as CanonicalAgent) : platform === 'claude' ? renderClaudeAgent(item as CanonicalAgent) : renderCodexAgent(item as CanonicalAgent)
     : platform === 'opencode' ? renderOpenCodeSkill(item as CanonicalSkill) : platform === 'claude' ? renderClaudeSkill(item as CanonicalSkill) : renderCodexSkill(item as CanonicalSkill);
   diagnostics.push(...rendered.diagnostics);
-  return { platform, kind, scope: options.scope, name: item.name, path: resolveOutputPath(platform, kind, options.scope, item.name, options.cwd, options.home), content: rendered.content };
+  return { platform, kind, scope: options.scope, name: item.name, sourcePath: (item as { sourcePath?: string }).sourcePath ?? '', path: resolveOutputPath(platform, kind, options.scope, item.name, options.cwd, options.home), content: rendered.content };
 }
 
 async function collisionDiagnostics(files: OutputFile[], force: boolean): Promise<Diagnostic[]> {

@@ -132,6 +132,8 @@ npx @guidobuilds/forge-ai update
 
 Forge replaces its managed agent and skill definitions in your supported agent configuration directories.
 
+Forge records installed files in manifests under `~/.forge-ai/` so updates can safely remove files that are no longer bundled. `update` prunes stale managed files by default only when the current file still matches the recorded checksum; use `--no-prune` to keep stale managed files. `--dry-run` previews writes and deletes without changing files or manifests.
+
 ## Uninstalling
 
 Remove Forge from the agent configuration directories for OpenCode, Codex, or Claude Code by deleting the installed Forge agent and skill entries.
