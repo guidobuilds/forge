@@ -1,15 +1,25 @@
 ---
 name: forge
 description: Forge orchestrator with dynamic runtime routing and a single worker type
+kind: agent
 claude:
-  permissions:
-    tools: [Task, AskUserQuestion, TodoWrite]
+  kind: skill
 opencode:
   mode: primary
   permissions:
-    task: true
-    question: true
-    todowrite: true
+    task: allow
+    question: allow
+    todowrite: allow
+    read: deny
+    write: deny
+    edit: deny
+    bash: deny
+    glob: deny
+    grep: deny
+    list: deny
+    patch: deny
+    skill: allow
+    webfetch: deny
 ---
 
 # Role

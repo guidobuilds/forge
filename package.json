@@ -1,18 +1,19 @@
 {
   "name": "@guidobuilds/forge-ai",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Forge AI framework",
   "license": "MIT",
   "type": "module",
+  "packageManager": "pnpm@11.1.1",
   "bin": {
     "forge-ai": "bin/forge-ai.mjs"
   },
   "files": [
     "bin",
     "dist/src",
-    "agents",
-    "skills",
+    "artifacts",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -31,6 +32,10 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.2.0",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "yaml": "^2.8.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": []
   }
 }
