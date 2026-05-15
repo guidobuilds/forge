@@ -1,6 +1,7 @@
 ---
 name: using-forge
 description: Route work through the lightest safe Forge workflow using dynamic runtime routing.
+kind: skill
 ---
 
 # Using Forge Skill

@@ -7,10 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Readable, Writable } from 'node:stream';
 import { formatDiagnostic, hasErrors } from './diagnostics.js';
-import { buildManifest, classifyPruneEntries, loadManifest, pruneEntries, resolveManifestLocation, saveManifest, staleEntries, type PrunePlanItem } from './manifest.js';
+import { buildManifest, classifyPruneEntries, loadManifest, pruneEntries, resolveBackupPath, resolveBackupRoot, resolveManifestLocation, saveManifest, staleEntries, type PrunePlanItem } from './manifest.js';
 import { buildWritePlan, parsePlatform, parseScope } from './processor.js';
 import { writeOutputs } from './writer.js';
-import type { Diagnostic, PlatformArg, Scope, WritePlan } from './model.js';
+import { hasPendingDecisions, type Diagnostic, type OutputFile, type PlatformArg, type Scope, type WritePlan } from './model.js';
 
 type Command = 'validate' | 'install' | 'update';
 type CliOptions = {
@@ -27,6 +27,14 @@ type CliOptions = {
   sourceExplicit: boolean;
 };
 type PromptIO = { input?: Readable; output?: Writable; isInteractive?: boolean; env?: NodeJS.ProcessEnv };
+
+type PrunePlan = {
+  deletable: PrunePlanItem[];
+  modifiedWithConsent: PrunePlanItem[];
+  skippedMissing: PrunePlanItem[];
+};
+
+const emptyPrunePlan: PrunePlan = { deletable: [], modifiedWithConsent: [], skippedMissing: [] };
 
 export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}): Promise<number> {
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
@@ -67,25 +75,49 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
 
   const cwd = process.cwd();
   const home = resolveHome(promptIO);
-  let plan = await buildWritePlan({ source: options.source, platform: options.platform, scope: options.scope, cwd, home, checkCollisions: install && !options.dryRun, force: options.force });
-  if (install && !options.dryRun && !options.force && canOfferUpdate(plan.diagnostics)) {
-    const accepted = await promptForUpdate(plan, promptIO);
-    if (accepted === undefined) {
-      if (interactive) p.cancel('Cancelled', clackIO(promptIO));
-      return 1;
-    }
-    if (accepted) {
-      options.force = true;
-      plan = await buildWritePlan({ source: options.source, platform: options.platform, scope: options.scope, cwd, home, checkCollisions: true, force: true });
-    }
-  }
+  const now = new Date();
 
-  let prunePlan: { deletable: PrunePlanItem[]; skipped: PrunePlanItem[] } = { deletable: [], skipped: [] };
   let manifestLocation: Awaited<ReturnType<typeof resolveManifestLocation>> | undefined;
+  let oldManifest;
+  let backupRoot: string | undefined;
   if (install) {
     manifestLocation = await resolveManifestLocation(options.scope, cwd, home);
-    const oldManifest = await loadManifest(manifestLocation.manifestPath);
-    if (command === 'update' && options.prune) prunePlan = await classifyPruneEntries(staleEntries(oldManifest, plan.files));
+    oldManifest = await loadManifest(manifestLocation.manifestPath);
+    backupRoot = resolveBackupRoot(manifestLocation, now);
+  }
+
+  const plan = await buildWritePlan({
+    source: options.source,
+    platform: options.platform,
+    scope: options.scope,
+    cwd,
+    home,
+    manifest: oldManifest,
+    backupRoot,
+    checkCollisions: install,
+  });
+
+  let prunePlan: PrunePlan = emptyPrunePlan;
+  if (install && command === 'update' && options.prune) {
+    prunePlan = await classifyPrune(oldManifest, plan.files, backupRoot!, options.scope, cwd, home);
+  }
+
+  const needsConfirm = install && !options.force && (hasPendingDecisions(plan.pending) || prunePlan.modifiedWithConsent.length > 0);
+  if (install && !options.dryRun && needsConfirm) {
+    if (!interactive) {
+      printPlan(command, plan.sourceCount, plan.files, plan.diagnostics, prunePlan);
+      console.error('Forge needs your decision on edited or untracked files; re-run with --yes or --force to accept overwrites + backups.');
+      return 1;
+    }
+    const accepted = await promptForUpdate(plan, prunePlan, backupRoot, promptIO);
+    if (accepted === undefined) {
+      p.cancel('Cancelled', clackIO(promptIO));
+      return 1;
+    }
+    if (!accepted) {
+      p.outro(pc.yellow('Forge was not installed.'), clackIO(promptIO));
+      return 1;
+    }
   }
 
   printPlan(command, plan.sourceCount, plan.files, plan.diagnostics, prunePlan);
@@ -99,8 +131,8 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
       spinner.start(options.force ? 'Updating Forge files' : 'Installing Forge files');
       try {
         await writeOutputs(plan.files);
-        if (command === 'update' && options.prune) await pruneEntries(prunePlan.deletable);
-        await saveManifest(manifestLocation!.manifestPath, buildManifest(manifestLocation!, plan.files));
+        if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent]);
+        await saveManifest(manifestLocation!.manifestPath, await buildManifest(manifestLocation!, plan.files));
         spinner.stop(`Wrote ${plan.files.length} file(s).`);
       } catch (error) {
         spinner.error('Failed to write Forge files');
@@ -108,10 +140,11 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
       }
     } else {
       await writeOutputs(plan.files);
-      if (command === 'update' && options.prune) await pruneEntries(prunePlan.deletable);
-      await saveManifest(manifestLocation!.manifestPath, buildManifest(manifestLocation!, plan.files));
+      if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent]);
+      await saveManifest(manifestLocation!.manifestPath, await buildManifest(manifestLocation!, plan.files));
       console.log(`Wrote ${plan.files.length} file(s).`);
-      if (command === 'update' && options.prune && prunePlan.deletable.length > 0) console.log(`Deleted ${prunePlan.deletable.length} stale file(s).`);
+      const totalDeleted = prunePlan.deletable.length + prunePlan.modifiedWithConsent.length;
+      if (command === 'update' && options.prune && totalDeleted > 0) console.log(`Deleted ${totalDeleted} stale file(s).`);
       console.log(`Updated manifest ${manifestLocation!.manifestPath}.`);
     }
   } else if (install && interactive) {
@@ -159,6 +192,19 @@ function parseArgs(argv: string[]): { options: CliOptions } | { error: string } 
   return { options };
 }
 
+async function classifyPrune(oldManifest: Awaited<ReturnType<typeof loadManifest>>, files: OutputFile[], backupRoot: string, scope: Scope, cwd: string, home: string): Promise<PrunePlan> {
+  const stale = staleEntries(oldManifest, files);
+  const classified = await classifyPruneEntries(stale);
+  const anchor = scope === 'user' ? home : cwd;
+  const modifiedWithConsent: PrunePlanItem[] = [];
+  const skippedMissing: PrunePlanItem[] = [];
+  for (const item of classified.skipped) {
+    if (item.reason === 'checksum-mismatch') modifiedWithConsent.push({ ...item, backupPath: resolveBackupPath(backupRoot, item.path, anchor) });
+    else skippedMissing.push(item);
+  }
+  return { deletable: classified.deletable, modifiedWithConsent, skippedMissing };
+}
+
 async function promptForMissingInstallOptions(options: CliOptions, promptIO: PromptIO): Promise<boolean> {
   if (options.yes) return true;
   if (options.platformExplicit && options.scopeExplicit) return true;
@@ -196,17 +242,26 @@ async function promptForMissingInstallOptions(options: CliOptions, promptIO: Pro
   return true;
 }
 
-async function promptForUpdate(plan: WritePlan & { sourceCount: number }, promptIO: PromptIO): Promise<boolean | undefined> {
+async function promptForUpdate(plan: WritePlan & { sourceCount: number }, prunePlan: PrunePlan, backupRoot: string | undefined, promptIO: PromptIO): Promise<boolean | undefined> {
   if (!isInteractivePrompt(promptIO)) return false;
-  const existing = plan.diagnostics.filter((item) => item.code === 'DESTINATION_EXISTS');
-  const count = existing.length;
-  p.log.warn(`${count} Forge output${count === 1 ? '' : 's'} already exist.`, clackIO(promptIO));
+  const io = clackIO(promptIO);
+  const sections: string[] = [];
+  if (plan.pending.modifiedOverwrites.length > 0) {
+    sections.push(`${pc.yellow('Edited by you, will be overwritten (backup):')}\n${plan.pending.modifiedOverwrites.map((file) => `  - ${file.path}`).join('\n')}`);
+  }
+  if (prunePlan.modifiedWithConsent.length > 0) {
+    sections.push(`${pc.yellow('Edited by you, will be deleted (backup):')}\n${prunePlan.modifiedWithConsent.map((entry) => `  - ${entry.path}`).join('\n')}`);
+  }
+  if (plan.pending.foreignOverwrites.length > 0) {
+    sections.push(`${pc.yellow('Untracked files in Forge install paths, will be overwritten:')}\n${plan.pending.foreignOverwrites.map((file) => `  - ${file.path}`).join('\n')}`);
+  }
+  p.log.warn(`The following actions need your confirmation:\n\n${sections.join('\n\n')}\n\nBackups → ${backupRoot ?? '(none)'}`, io);
   const accepted = await p.confirm({
-    message: 'Update the existing Forge files?',
-    active: 'Update',
+    message: 'Continue with overwrites + backups?',
+    active: 'Continue',
     inactive: 'Cancel',
     initialValue: false,
-    ...clackIO(promptIO)
+    ...io
   });
   if (p.isCancel(accepted)) return undefined;
   return accepted;
@@ -217,11 +272,6 @@ function normalizeCommand(command?: string): Command | undefined {
   if (command === 'update' || command === 'upgrade') return 'update';
   if (command === 'validate') return 'validate';
   return undefined;
-}
-
-function canOfferUpdate(diagnostics: Diagnostic[]): boolean {
-  const errors = diagnostics.filter((item) => item.severity === 'error');
-  return errors.length > 0 && errors.every((item) => item.code === 'DESTINATION_EXISTS');
 }
 
 function isInteractivePrompt(promptIO: PromptIO): boolean {
@@ -257,14 +307,22 @@ function showUsage(): void {
   console.log('       forge-ai validate [--platform opencode|claude|codex|all] [--source <dir>]');
 }
 
-function printPlan(command: string, sourceCount: number, files: Array<{ platform: string; kind: string; name: string; path: string }>, diagnostics: Parameters<typeof formatDiagnostic>[0][], prunePlan: { deletable: PrunePlanItem[]; skipped: PrunePlanItem[] } = { deletable: [], skipped: [] }): void {
+function printPlan(command: string, sourceCount: number, files: OutputFile[], diagnostics: Diagnostic[], prunePlan: PrunePlan): void {
   console.log(`${command}: ${sourceCount} source(s), ${files.length} output(s)`);
-  for (const file of files) console.log(`- ${file.platform} ${file.kind} ${file.name} -> ${file.path}`);
-  for (const file of prunePlan.deletable) console.log(`- delete stale ${file.platform} ${file.kind} ${file.name} -> ${file.path}`);
-  for (const file of prunePlan.skipped) {
-    if (file.reason === 'checksum-mismatch') console.log(`warning CHECKSUM_MISMATCH: Skipping stale managed file with local changes ${file.path}`);
-  }
+  for (const file of files) console.log(`- ${file.platform} ${file.kind} ${file.name} -> ${file.path}${statusSuffix(file)}`);
+  for (const item of prunePlan.deletable) console.log(`- delete stale ${item.platform} ${item.kind} ${item.name} -> ${item.path}`);
+  for (const item of prunePlan.modifiedWithConsent) console.log(`- delete stale ${item.platform} ${item.kind} ${item.name} -> ${item.path} [backup -> ${item.backupPath}]`);
+  for (const item of prunePlan.skippedMissing) console.log(`- skip missing ${item.platform} ${item.kind} ${item.name} -> ${item.path}`);
   for (const item of diagnostics) console.log(formatDiagnostic(item));
+}
+
+function statusSuffix(file: OutputFile): string {
+  if (file.status === 'managed-modified' && file.backupPath) return ` [overwrite, backup -> ${file.backupPath}]`;
+  if (file.status === 'managed-modified') return ' [overwrite]';
+  if (file.status === 'foreign') return ' [foreign overwrite]';
+  if (file.status === 'managed-unmodified') return ' [refresh]';
+  if (file.status === 'new') return ' [new]';
+  return '';
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

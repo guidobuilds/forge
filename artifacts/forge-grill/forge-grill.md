@@ -1,6 +1,7 @@
 ---
 name: forge-grill
 description: Stress-test a plan or design through Forge orchestration, batching user questions while delegating codebase-answerable work to forge-worker.
+kind: skill
 ---
 
 # Forge Grill Skill

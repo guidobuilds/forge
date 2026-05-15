@@ -108,11 +108,13 @@ npx @guidobuilds/forge-ai validate --source .
 
 ## Local Development
 
+Forge uses [pnpm](https://pnpm.io) for development (pinned via `packageManager` in `package.json`, so `corepack enable` is enough — no global install needed). The published package is still consumed by end users via `npx`/npm, unchanged.
+
 From a local checkout:
 
 ```sh
-npm install
-npm run build
+pnpm install
+pnpm run build
 node bin/forge-ai.mjs install --source . --platform all --scope user
 ```
 
@@ -133,6 +135,8 @@ npx @guidobuilds/forge-ai update
 Forge replaces its managed agent and skill definitions in your supported agent configuration directories.
 
 Forge records installed files in manifests under `~/.forge-ai/` so updates can safely remove files that are no longer bundled. `update` prunes stale managed files by default only when the current file still matches the recorded checksum; use `--no-prune` to keep stale managed files. `--dry-run` previews writes and deletes without changing files or manifests.
+
+Forge now routes a single canonical artifact to the right artifact kind per agent: the orchestrator installs as a Claude Code skill (`/forge`) but as an agent on OpenCode and Codex. If you installed an earlier version, run `update` (not `install`) so Forge prunes the now-stale `forge` agent and standalone `forge-worker` skill left by the previous layout.
 
 ## Uninstalling
 

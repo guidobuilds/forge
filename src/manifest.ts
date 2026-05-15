@@ -30,7 +30,7 @@ export type ManifestLocation = {
   projectPathHash?: string;
 };
 
-export type PrunePlanItem = ManifestEntry & { reason?: 'checksum-mismatch' | 'missing' };
+export type PrunePlanItem = ManifestEntry & { reason?: 'checksum-mismatch' | 'missing'; backupPath?: string };
 
 export async function resolveManifestLocation(scope: Scope, cwd = process.cwd(), home: string): Promise<ManifestLocation> {
   const stateRoot = path.join(home, '.forge-ai');
@@ -49,27 +49,32 @@ export async function loadManifest(manifestPath: string): Promise<AssetManifest 
   }
 }
 
-export function buildManifest(location: ManifestLocation, files: OutputFile[], now = new Date()): AssetManifest {
+export async function buildManifest(location: ManifestLocation, files: OutputFile[], now = new Date()): Promise<AssetManifest> {
+  const entries = await Promise.all(files.map(async (file) => ({
+    platform: file.platform,
+    kind: file.kind,
+    name: file.name,
+    path: file.path,
+    sourcePath: file.sourcePath,
+    checksum: sha256(await readFile(file.path, 'utf8'))
+  })));
   return {
     schemaVersion: 1,
     scope: location.scope,
     projectPath: location.projectPath,
     projectPathHash: location.projectPathHash,
     updatedAt: now.toISOString(),
-    entries: files.map((file) => ({
-      platform: file.platform,
-      kind: file.kind,
-      name: file.name,
-      path: file.path,
-      sourcePath: file.sourcePath,
-      checksum: sha256(file.content)
-    }))
+    entries
   };
 }
 
 export async function saveManifest(manifestPath: string, manifest: AssetManifest): Promise<void> {
   await mkdir(path.dirname(manifestPath), { recursive: true });
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+}
+
+export function lookupEntryByPath(manifest: AssetManifest | undefined, filePath: string): ManifestEntry | undefined {
+  return manifest?.entries.find((entry) => entry.path === filePath);
 }
 
 export function staleEntries(oldManifest: AssetManifest | undefined, files: OutputFile[]): ManifestEntry[] {
@@ -96,11 +101,38 @@ export async function classifyPruneEntries(entries: ManifestEntry[]): Promise<{ 
   return { deletable, skipped };
 }
 
-export async function pruneEntries(entries: ManifestEntry[]): Promise<void> {
+export async function pruneEntries(entries: PrunePlanItem[]): Promise<void> {
   for (const entry of entries) {
+    if (entry.backupPath) {
+      try {
+        const content = await readFile(entry.path, 'utf8');
+        await backupFile(entry.backupPath, content);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        // Source file is already gone; nothing to back up.
+      }
+    }
     await rm(entry.path, { force: true });
     if (entry.kind === 'skill') await removeEmptyParent(path.dirname(entry.path));
   }
+}
+
+export function resolveBackupRoot(location: ManifestLocation, now: Date): string {
+  const scopeKey = location.scope === 'user' ? 'user' : path.join('projects', location.projectPathHash ?? 'unknown');
+  return path.join(location.stateRoot, 'backups', scopeKey, isoTimestamp(now));
+}
+
+export function resolveBackupPath(backupRoot: string, originalAbsolutePath: string, anchor: string): string {
+  const rel = path.relative(anchor, originalAbsolutePath);
+  const safe = rel.startsWith('..') || path.isAbsolute(rel)
+    ? originalAbsolutePath.replace(/^[\/\\]+/, '')
+    : rel;
+  return path.join(backupRoot, safe);
+}
+
+export async function backupFile(backupPath: string, content: string): Promise<void> {
+  await mkdir(path.dirname(backupPath), { recursive: true });
+  await writeFile(backupPath, content, 'utf8');
 }
 
 export function sha256(content: string): string {
@@ -109,6 +141,10 @@ export function sha256(content: string): string {
 
 export function hashProjectPath(projectPath: string): string {
   return sha256(projectPath).slice(0, 32);
+}
+
+function isoTimestamp(now: Date): string {
+  return now.toISOString().replace(/[:.]/g, '-');
 }
 
 async function canonicalProjectPath(cwd: string): Promise<string> {
