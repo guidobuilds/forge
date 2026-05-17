@@ -9,6 +9,12 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+### Added
+
+- `forge-ai self-update` command. Detects how the CLI is installed (pnpm global, npm global, Homebrew npm, npx, or unknown) and runs the right update command with the right flags (`--prefer-online` for pnpm to sidestep its metadata cache). After updating the binary it automatically runs `forge-ai update` to refresh the spec kit. Flags: `--to <version>` to pin a specific version, `--dry-run` to preview, `--skip-spec-update` to only bump the CLI.
+- Background version check on every interactive run. Calls the npm registry (with 1.5s timeout, cached for 1h at `~/.forge-ai/version-check.json`) and prints `forge-ai vX.Y.Z (vA.B.C available — run \`forge-ai self-update\` to upgrade)` when a newer version exists. Silent on failure; never blocks the command.
+- `--no-update-check` CLI flag and `FORGE_NO_UPDATE_CHECK=1` env var to opt out of the version check. Also auto-skipped in CI (`CI=true`) and non-interactive runs.
+
 ## [0.3.0] - 2026-05-15
 
 ### Added
