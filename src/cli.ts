@@ -9,10 +9,12 @@ import type { Readable, Writable } from 'node:stream';
 import { formatDiagnostic, hasErrors } from './diagnostics.js';
 import { buildManifest, classifyPruneEntries, loadManifest, pruneEntries, resolveBackupPath, resolveBackupRoot, resolveManifestLocation, saveManifest, staleEntries, type PrunePlanItem } from './manifest.js';
 import { buildWritePlan, parsePlatform, parseScope } from './processor.js';
+import { runSelfUpdate } from './self-update.js';
+import { checkLatestVersion, formatVersionNotice } from './version-check.js';
 import { writeOutputs } from './writer.js';
 import { hasPendingDecisions, type Diagnostic, type OutputFile, type PlatformArg, type Scope, type WritePlan } from './model.js';
 
-type Command = 'validate' | 'install' | 'update';
+type Command = 'validate' | 'install' | 'update' | 'self-update';
 type CliOptions = {
   command?: string;
   platform: PlatformArg;
@@ -22,6 +24,9 @@ type CliOptions = {
   force: boolean;
   prune: boolean;
   yes: boolean;
+  noUpdateCheck: boolean;
+  skipSpecUpdate: boolean;
+  targetVersion?: string;
   platformExplicit: boolean;
   scopeExplicit: boolean;
   sourceExplicit: boolean;
@@ -60,111 +65,138 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
     return 1;
   }
 
-  const install = command === 'install' || command === 'update';
-  if (install && !options.sourceExplicit) options.source = bundledSourceRoot();
-  if (command === 'update' || options.yes) options.force = true;
-  const interactive = install && isInteractivePrompt(promptIO);
-  if (interactive) p.intro(`${pc.bold('Forge AI')} ${pc.dim(command === 'update' ? 'updater' : 'installer')}`, clackIO(promptIO));
-  if (install) {
-    const prompted = await promptForMissingInstallOptions(options, promptIO);
-    if (!prompted) {
-      if (interactive) p.cancel('Cancelled', clackIO(promptIO));
+  if (command === 'self-update') {
+    return runSelfUpdate({
+      binaryPath: process.argv[1] ?? bundledSourceRoot(),
+      version: options.targetVersion,
+      dryRun: options.dryRun,
+      skipSpecUpdate: options.skipSpecUpdate,
+    });
+  }
+
+  const versionCheckPromise = shouldCheckForUpdates(options, promptIO)
+    ? checkLatestVersion({ current: readPackageVersion(), cachePath: path.join(resolveHome(promptIO), '.forge-ai', 'version-check.json') }).catch(() => undefined)
+    : Promise.resolve(undefined);
+
+  try {
+    const install = command === 'install' || command === 'update';
+    if (install && !options.sourceExplicit) options.source = bundledSourceRoot();
+    if (command === 'update' || options.yes) options.force = true;
+    const interactive = install && isInteractivePrompt(promptIO);
+    if (interactive) p.intro(`${pc.bold('Forge AI')} ${pc.dim(command === 'update' ? 'updater' : 'installer')}`, clackIO(promptIO));
+    if (install) {
+      const prompted = await promptForMissingInstallOptions(options, promptIO);
+      if (!prompted) {
+        if (interactive) p.cancel('Cancelled', clackIO(promptIO));
+        return 1;
+      }
+    }
+
+    const cwd = process.cwd();
+    const home = resolveHome(promptIO);
+    const now = new Date();
+
+    let manifestLocation: Awaited<ReturnType<typeof resolveManifestLocation>> | undefined;
+    let oldManifest;
+    let backupRoot: string | undefined;
+    if (install) {
+      manifestLocation = await resolveManifestLocation(options.scope, cwd, home);
+      oldManifest = await loadManifest(manifestLocation.manifestPath);
+      backupRoot = resolveBackupRoot(manifestLocation, now);
+    }
+
+    const plan = await buildWritePlan({
+      source: options.source,
+      platform: options.platform,
+      scope: options.scope,
+      cwd,
+      home,
+      manifest: oldManifest,
+      backupRoot,
+      checkCollisions: install,
+    });
+
+    let prunePlan: PrunePlan = emptyPrunePlan;
+    if (install && command === 'update' && options.prune) {
+      prunePlan = await classifyPrune(oldManifest, plan.files, backupRoot!, options.scope, cwd, home);
+    }
+
+    const needsConfirm = install && !options.force && (hasPendingDecisions(plan.pending) || prunePlan.modifiedWithConsent.length > 0);
+    if (install && !options.dryRun && needsConfirm) {
+      if (!interactive) {
+        printPlan(command, plan.sourceCount, plan.files, plan.diagnostics, prunePlan);
+        console.error('Forge needs your decision on edited or untracked files; re-run with --yes or --force to accept overwrites + backups.');
+        return 1;
+      }
+      const accepted = await promptForUpdate(plan, prunePlan, backupRoot, promptIO);
+      if (accepted === undefined) {
+        p.cancel('Cancelled', clackIO(promptIO));
+        return 1;
+      }
+      if (!accepted) {
+        p.outro(pc.yellow('Forge was not installed.'), clackIO(promptIO));
+        return 1;
+      }
+    }
+
+    printPlan(command, plan.sourceCount, plan.files, plan.diagnostics, prunePlan);
+    if (hasErrors(plan.diagnostics)) {
+      if (interactive) p.outro(pc.red('Forge was not installed.'), clackIO(promptIO));
       return 1;
     }
-  }
-
-  const cwd = process.cwd();
-  const home = resolveHome(promptIO);
-  const now = new Date();
-
-  let manifestLocation: Awaited<ReturnType<typeof resolveManifestLocation>> | undefined;
-  let oldManifest;
-  let backupRoot: string | undefined;
-  if (install) {
-    manifestLocation = await resolveManifestLocation(options.scope, cwd, home);
-    oldManifest = await loadManifest(manifestLocation.manifestPath);
-    backupRoot = resolveBackupRoot(manifestLocation, now);
-  }
-
-  const plan = await buildWritePlan({
-    source: options.source,
-    platform: options.platform,
-    scope: options.scope,
-    cwd,
-    home,
-    manifest: oldManifest,
-    backupRoot,
-    checkCollisions: install,
-  });
-
-  let prunePlan: PrunePlan = emptyPrunePlan;
-  if (install && command === 'update' && options.prune) {
-    prunePlan = await classifyPrune(oldManifest, plan.files, backupRoot!, options.scope, cwd, home);
-  }
-
-  const needsConfirm = install && !options.force && (hasPendingDecisions(plan.pending) || prunePlan.modifiedWithConsent.length > 0);
-  if (install && !options.dryRun && needsConfirm) {
-    if (!interactive) {
-      printPlan(command, plan.sourceCount, plan.files, plan.diagnostics, prunePlan);
-      console.error('Forge needs your decision on edited or untracked files; re-run with --yes or --force to accept overwrites + backups.');
-      return 1;
-    }
-    const accepted = await promptForUpdate(plan, prunePlan, backupRoot, promptIO);
-    if (accepted === undefined) {
-      p.cancel('Cancelled', clackIO(promptIO));
-      return 1;
-    }
-    if (!accepted) {
-      p.outro(pc.yellow('Forge was not installed.'), clackIO(promptIO));
-      return 1;
-    }
-  }
-
-  printPlan(command, plan.sourceCount, plan.files, plan.diagnostics, prunePlan);
-  if (hasErrors(plan.diagnostics)) {
-    if (interactive) p.outro(pc.red('Forge was not installed.'), clackIO(promptIO));
-    return 1;
-  }
-  if (install && !options.dryRun) {
-    if (interactive) {
-      const spinner = p.spinner(clackIO(promptIO));
-      spinner.start(options.force ? 'Updating Forge files' : 'Installing Forge files');
-      try {
+    if (install && !options.dryRun) {
+      if (interactive) {
+        const spinner = p.spinner(clackIO(promptIO));
+        spinner.start(options.force ? 'Updating Forge files' : 'Installing Forge files');
+        try {
+          await writeOutputs(plan.files);
+          if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent]);
+          await saveManifest(manifestLocation!.manifestPath, await buildManifest(manifestLocation!, plan.files));
+          spinner.stop(`Wrote ${plan.files.length} file(s).`);
+        } catch (error) {
+          spinner.error('Failed to write Forge files');
+          throw error;
+        }
+      } else {
         await writeOutputs(plan.files);
         if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent]);
         await saveManifest(manifestLocation!.manifestPath, await buildManifest(manifestLocation!, plan.files));
-        spinner.stop(`Wrote ${plan.files.length} file(s).`);
-      } catch (error) {
-        spinner.error('Failed to write Forge files');
-        throw error;
+        console.log(`Wrote ${plan.files.length} file(s).`);
+        const totalDeleted = prunePlan.deletable.length + prunePlan.modifiedWithConsent.length;
+        if (command === 'update' && options.prune && totalDeleted > 0) console.log(`Deleted ${totalDeleted} stale file(s).`);
+        console.log(`Updated manifest ${manifestLocation!.manifestPath}.`);
       }
-    } else {
-      await writeOutputs(plan.files);
-      if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent]);
-      await saveManifest(manifestLocation!.manifestPath, await buildManifest(manifestLocation!, plan.files));
-      console.log(`Wrote ${plan.files.length} file(s).`);
-      const totalDeleted = prunePlan.deletable.length + prunePlan.modifiedWithConsent.length;
-      if (command === 'update' && options.prune && totalDeleted > 0) console.log(`Deleted ${totalDeleted} stale file(s).`);
-      console.log(`Updated manifest ${manifestLocation!.manifestPath}.`);
+    } else if (install && interactive) {
+      p.log.info(`Dry run only. ${plan.files.length} file(s) would be written.`, clackIO(promptIO));
     }
-  } else if (install && interactive) {
-    p.log.info(`Dry run only. ${plan.files.length} file(s) would be written.`, clackIO(promptIO));
+    if (install && interactive) {
+      p.outro(options.dryRun ? pc.cyan('Dry run complete.') : pc.green('Forge is ready.'), clackIO(promptIO));
+    }
+    return 0;
+  } finally {
+    const result = await versionCheckPromise;
+    if (result) {
+      const notice = formatVersionNotice(result);
+      if (notice) console.log(notice);
+    }
   }
-  if (install && interactive) {
-    p.outro(options.dryRun ? pc.cyan('Dry run complete.') : pc.green('Forge is ready.'), clackIO(promptIO));
-  }
-  return 0;
 }
 
 function parseArgs(argv: string[]): { options: CliOptions } | { error: string } {
-  const options: CliOptions = { command: argv[0], platform: 'all', scope: 'user', source: '.', dryRun: false, force: false, prune: true, yes: false, platformExplicit: false, scopeExplicit: false, sourceExplicit: false };
+  const options: CliOptions = { command: argv[0], platform: 'all', scope: 'user', source: '.', dryRun: false, force: false, prune: true, yes: false, noUpdateCheck: false, skipSpecUpdate: false, platformExplicit: false, scopeExplicit: false, sourceExplicit: false };
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--force') options.force = true;
     else if (arg === '--no-prune') options.prune = false;
     else if (arg === '--yes' || arg === '-y') options.yes = true;
-    else if (arg === '--platform') {
+    else if (arg === '--no-update-check') options.noUpdateCheck = true;
+    else if (arg === '--skip-spec-update') options.skipSpecUpdate = true;
+    else if (arg === '--to') {
+      const value = argv[++index];
+      if (!value) return { error: 'Missing --to value' };
+      options.targetVersion = value;
+    } else if (arg === '--platform') {
       const value = argv[++index];
       const platform = value ? parsePlatform(value) : undefined;
       if (!platform) return { error: `Invalid --platform ${value ?? ''}` };
@@ -189,6 +221,8 @@ function parseArgs(argv: string[]): { options: CliOptions } | { error: string } 
   const command = normalizeCommand(options.command);
   if (command !== 'update' && !options.prune) return { error: '--no-prune is only accepted for update' };
   if (command === 'validate' && (options.dryRun || options.force || options.yes || options.scopeExplicit)) return { error: 'validate only accepts --platform and --source' };
+  if (command !== 'self-update' && (options.targetVersion !== undefined || options.skipSpecUpdate)) return { error: '--to and --skip-spec-update are only accepted for self-update' };
+  if (command === 'self-update' && (options.platformExplicit || options.scopeExplicit || options.sourceExplicit || options.force || options.yes)) return { error: 'self-update only accepts --to, --dry-run, --skip-spec-update' };
   return { options };
 }
 
@@ -271,7 +305,18 @@ function normalizeCommand(command?: string): Command | undefined {
   if (command === 'install' || command === 'i') return 'install';
   if (command === 'update' || command === 'upgrade') return 'update';
   if (command === 'validate') return 'validate';
+  if (command === 'self-update') return 'self-update';
   return undefined;
+}
+
+function shouldCheckForUpdates(options: CliOptions, promptIO: PromptIO): boolean {
+  if (options.noUpdateCheck) return false;
+  const env = promptIO.env ?? process.env;
+  if (env.CI === 'true') return false;
+  if (env.FORGE_NO_UPDATE_CHECK === '1' || env.FORGE_NO_UPDATE_CHECK === 'true') return false;
+  // Skip in non-interactive runs (pipes, CI, scripts): the notice is a UX nudge for terminal users.
+  if (!isInteractivePrompt(promptIO)) return false;
+  return true;
 }
 
 function isInteractivePrompt(promptIO: PromptIO): boolean {
@@ -305,6 +350,9 @@ function showUsage(): void {
   console.log('Usage: forge-ai install [--platform opencode|claude|codex|all] [--scope user|project] [--source <dir>] [--dry-run] [--force] [--yes]');
   console.log('       forge-ai update [--platform opencode|claude|codex|all] [--scope user|project] [--source <dir>] [--dry-run] [--no-prune] [--yes]');
   console.log('       forge-ai validate [--platform opencode|claude|codex|all] [--source <dir>]');
+  console.log('       forge-ai self-update [--to <version>] [--dry-run] [--skip-spec-update]');
+  console.log('');
+  console.log('Global flags: --no-update-check (also FORGE_NO_UPDATE_CHECK=1 or CI=true)');
 }
 
 function printPlan(command: string, sourceCount: number, files: OutputFile[], diagnostics: Diagnostic[], prunePlan: PrunePlan): void {

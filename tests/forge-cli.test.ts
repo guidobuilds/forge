@@ -14,6 +14,8 @@ import { discoverSources } from '../src/discovery.js';
 import { parseFrontmatter } from '../src/frontmatter.js';
 import { buildManifest, hashProjectPath, resolveManifestLocation, saveManifest, sha256, type AssetManifest } from '../src/manifest.js';
 import { buildWritePlan } from '../src/processor.js';
+import { buildUpdateCommand, detectInstallMethod, runSelfUpdate } from '../src/self-update.js';
+import { checkLatestVersion, compareSemver, formatVersionNotice } from '../src/version-check.js';
 import { writeOutputs } from '../src/writer.js';
 import type { CanonicalArtifact } from '../src/model.js';
 
@@ -457,6 +459,180 @@ test('bundled forge artifact installs as a Claude skill, not a subagent', async 
   assert.match(output.stdout, /claude skill forge -> .*\.claude\/skills\/forge\/SKILL\.md/);
   assert.doesNotMatch(output.stdout, /\.claude\/agents\/forge\.md/);
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
+});
+
+test('compareSemver orders versions numerically', () => {
+  assert.equal(compareSemver('0.2.0', '0.3.0') < 0, true);
+  assert.equal(compareSemver('0.3.0', '0.3.0'), 0);
+  assert.equal(compareSemver('0.10.0', '0.9.0') > 0, true);
+  assert.equal(compareSemver('1.0.0', '0.99.99') > 0, true);
+});
+
+test('formatVersionNotice is empty for current versions and shows hint when outdated', () => {
+  assert.equal(formatVersionNotice({ current: '0.3.0', latest: '0.3.0', isOutdated: false }), '');
+  const notice = formatVersionNotice({ current: '0.3.0', latest: '0.4.0', isOutdated: true });
+  assert.match(notice, /v0\.3\.0/);
+  assert.match(notice, /v0\.4\.0 available/);
+  assert.match(notice, /forge-ai self-update/);
+});
+
+test('checkLatestVersion uses cache when fresh', async () => {
+  const dir = await tempDir('forge-fixture-');
+  const cachePath = path.join(dir, 'version-check.json');
+  await writeFile(cachePath, JSON.stringify({ checkedAt: '2026-05-17T10:00:00Z', latest: '0.4.0' }));
+  let fetchCalls = 0;
+  const result = await checkLatestVersion({
+    current: '0.3.0',
+    cachePath,
+    now: new Date('2026-05-17T10:30:00Z'),
+    ttlMs: 60 * 60 * 1000,
+    fetcher: async () => { fetchCalls += 1; return { ok: true, json: async () => ({ version: '0.5.0' }) }; }
+  });
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(result, { current: '0.3.0', latest: '0.4.0', isOutdated: true });
+});
+
+test('checkLatestVersion refetches when cache is stale and writes new cache', async () => {
+  const dir = await tempDir('forge-fixture-');
+  const cachePath = path.join(dir, 'version-check.json');
+  await writeFile(cachePath, JSON.stringify({ checkedAt: '2026-05-17T08:00:00Z', latest: '0.3.0' }));
+  const result = await checkLatestVersion({
+    current: '0.3.0',
+    cachePath,
+    now: new Date('2026-05-17T10:30:00Z'),
+    ttlMs: 60 * 60 * 1000,
+    fetcher: async () => ({ ok: true, json: async () => ({ version: '0.4.0' }) })
+  });
+  assert.deepEqual(result, { current: '0.3.0', latest: '0.4.0', isOutdated: true });
+  const written = JSON.parse(await readFile(cachePath, 'utf8'));
+  assert.equal(written.latest, '0.4.0');
+  assert.equal(written.checkedAt, '2026-05-17T10:30:00.000Z');
+});
+
+test('checkLatestVersion falls back to stale cache when fetch fails', async () => {
+  const dir = await tempDir('forge-fixture-');
+  const cachePath = path.join(dir, 'version-check.json');
+  await writeFile(cachePath, JSON.stringify({ checkedAt: '2026-05-17T08:00:00Z', latest: '0.3.0' }));
+  const result = await checkLatestVersion({
+    current: '0.3.0',
+    cachePath,
+    now: new Date('2026-05-17T10:30:00Z'),
+    ttlMs: 60 * 60 * 1000,
+    fetcher: async () => { throw new Error('network down'); }
+  });
+  assert.deepEqual(result, { current: '0.3.0', latest: '0.3.0', isOutdated: false });
+});
+
+test('checkLatestVersion returns undefined when there is no cache and fetch fails', async () => {
+  const dir = await tempDir('forge-fixture-');
+  const cachePath = path.join(dir, 'no-cache.json');
+  const result = await checkLatestVersion({
+    current: '0.3.0',
+    cachePath,
+    fetcher: async () => { throw new Error('network down'); }
+  });
+  assert.equal(result, undefined);
+});
+
+test('detectInstallMethod recognizes pnpm, npm, npx, homebrew, unknown', () => {
+  assert.equal(detectInstallMethod('/Users/guido/Library/pnpm/global/v11/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs'), 'pnpm-global');
+  assert.equal(detectInstallMethod('/Users/guido/.npm/_npx/abc123/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs'), 'npx');
+  assert.equal(detectInstallMethod('/opt/homebrew/lib/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs'), 'npm-global-homebrew');
+  assert.equal(detectInstallMethod('/usr/local/lib/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs'), 'npm-global');
+  assert.equal(detectInstallMethod('/somewhere/odd/forge-ai'), 'unknown');
+});
+
+test('buildUpdateCommand produces the right command per install method', () => {
+  const pnpm = buildUpdateCommand('pnpm-global');
+  assert.equal(pnpm.command, 'pnpm');
+  assert.deepEqual(pnpm.args, ['add', '-g', '@guidobuilds/forge-ai@latest', '--prefer-online']);
+
+  const npm = buildUpdateCommand('npm-global', '0.4.0');
+  assert.equal(npm.command, 'npm');
+  assert.deepEqual(npm.args, ['install', '-g', '@guidobuilds/forge-ai@0.4.0']);
+
+  const brew = buildUpdateCommand('npm-global-homebrew');
+  assert.equal(brew.command, '/opt/homebrew/bin/npm');
+
+  const npx = buildUpdateCommand('npx');
+  assert.equal(npx.command, '');
+  assert.match(npx.instructions ?? '', /No global install/);
+
+  const unknown = buildUpdateCommand('unknown');
+  assert.equal(unknown.command, '');
+  assert.match(unknown.instructions ?? '', /detect install method/);
+});
+
+test('runSelfUpdate dry-run prints command without spawning', async () => {
+  const logs: string[] = [];
+  let spawnCalls = 0;
+  const code = await runSelfUpdate({
+    binaryPath: '/Users/guido/Library/pnpm/bin/forge-ai',
+    dryRun: true,
+    realPathResolver: () => '/Users/guido/Library/pnpm/global/v11/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs',
+    spawner: () => { spawnCalls += 1; return { status: 0 }; },
+    log: (msg) => logs.push(msg),
+  });
+  assert.equal(code, 0);
+  assert.equal(spawnCalls, 0);
+  assert.ok(logs.some((line) => /pnpm global/.test(line)));
+  assert.ok(logs.some((line) => /pnpm add -g @guidobuilds\/forge-ai@latest --prefer-online/.test(line)));
+  assert.ok(logs.some((line) => /dry-run/.test(line)));
+});
+
+test('runSelfUpdate runs the CLI update then the spec update sequentially', async () => {
+  const logs: string[] = [];
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const code = await runSelfUpdate({
+    binaryPath: '/Users/guido/Library/pnpm/bin/forge-ai',
+    realPathResolver: () => '/Users/guido/Library/pnpm/global/v11/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs',
+    spawner: (command, args) => { calls.push({ command, args }); return { status: 0 }; },
+    log: (msg) => logs.push(msg),
+  });
+  assert.equal(code, 0);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].command, 'pnpm');
+  assert.deepEqual(calls[1], { command: 'forge-ai', args: ['update'] });
+});
+
+test('runSelfUpdate skips the spec update with --skip-spec-update', async () => {
+  const calls: Array<{ command: string }> = [];
+  const code = await runSelfUpdate({
+    binaryPath: '/Users/guido/Library/pnpm/bin/forge-ai',
+    skipSpecUpdate: true,
+    realPathResolver: () => '/Users/guido/Library/pnpm/global/v11/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs',
+    spawner: (command) => { calls.push({ command }); return { status: 0 }; },
+    log: () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'pnpm');
+});
+
+test('runSelfUpdate detects install via the symlink path when realpath points elsewhere (pnpm link --global)', async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const code = await runSelfUpdate({
+    binaryPath: '/Users/guido/Library/pnpm/bin/forge-ai',
+    realPathResolver: () => '/Users/guido/dev/forge/bin/forge-ai.mjs',  // local checkout
+    spawner: (command, args) => { calls.push({ command, args }); return { status: 0 }; },
+    log: () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(calls[0].command, 'pnpm');
+});
+
+test('runSelfUpdate surfaces instructions when install method is npx', async () => {
+  const logs: string[] = [];
+  let spawnCalls = 0;
+  const code = await runSelfUpdate({
+    binaryPath: '/Users/guido/.npm/_npx/abc/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs',
+    realPathResolver: (p) => p,
+    spawner: () => { spawnCalls += 1; return { status: 0 }; },
+    log: (msg) => logs.push(msg),
+  });
+  assert.equal(code, 1);
+  assert.equal(spawnCalls, 0);
+  assert.ok(logs.some((line) => /No global install/.test(line)));
 });
 
 async function fixtureRoot(): Promise<string> {

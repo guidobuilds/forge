@@ -126,10 +126,20 @@ node bin/forge-ai.mjs install --source . --platform all --scope project --dry-ru
 
 ## Updating
 
-Run the npm updater:
+If you have Forge installed globally, the simplest way is:
 
 ```sh
-npx @guidobuilds/forge-ai update
+forge-ai self-update
+```
+
+This detects how the CLI was installed (pnpm global, npm global, Homebrew npm, etc.) and runs the right upgrade command — including the `--prefer-online` flag that sidesteps pnpm's metadata cache when a new version was just published. After bumping the binary, it automatically runs `forge-ai update` to refresh the spec kit.
+
+Forge also pings the registry on every interactive run and prints a one-line notice when a newer version is available, so you don't have to remember to check.
+
+If you don't have a global install (running via `npx`):
+
+```sh
+npx @guidobuilds/forge-ai@latest update
 ```
 
 Forge replaces its managed agent and skill definitions in your supported agent configuration directories.
