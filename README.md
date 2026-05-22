@@ -106,6 +106,57 @@ Validate a local Forge source tree:
 npx @guidobuilds/forge-ai validate --source .
 ```
 
+## How to Use
+
+Forge installs the **same operating model** on every agent, but **how you invoke it differs per platform**, because each agent exposes different primitives (skills, subagents, agent switching). The installer is only step one — this section is how you actually drive Forge once it is installed.
+
+### The pieces
+
+Forge is one orchestrator plus one worker, with two supporting skills:
+
+- **`forge`** — the orchestrator. It talks to you, decides how much process a task needs, and delegates the real work. It does not edit code itself.
+- **`forge-worker`** — the worker. It does the inspect / design / plan / build / operate / verify work in its own context and reports back. This is what keeps the orchestrator's context clean.
+- **`using-forge`** — the shared operating-model skill the orchestrator follows.
+- **`forge-grill`** — an orchestrator mode for stress-testing a plan or design before building.
+
+What changes per platform is the **kind** each piece is installed as, and therefore how you trigger it.
+
+### Claude Code
+
+| Piece | Installed as | How you invoke it |
+|---|---|---|
+| `forge` | skill | type `/forge` in the prompt |
+| `forge-grill` | skill | type `/forge-grill` |
+| `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
+| `forge-worker` | subagent | the main thread delegates to it; or say "use the forge-worker subagent" |
+
+Start a session by typing **`/forge`**. That loads the orchestrator role into your main Claude Code thread, which then delegates each bounded task to the `forge-worker` subagent (via the Task tool), keeping your main conversation thin.
+
+> Why a skill and not an agent on Claude? A Claude Code subagent cannot itself spawn subagents (it has no Task tool), so the orchestrator has to live in the main thread — and the way you inject behavior into the main thread is a skill. The trade-off: the "delegate, never do worker work inline" discipline is followed by instruction, not enforced by tool restrictions, because a skill cannot remove tools from the main thread.
+
+### OpenCode
+
+| Piece | Installed as | How you invoke it |
+|---|---|---|
+| `forge` | primary agent | switch your active agent to `forge` |
+| `forge-worker` | subagent | the `forge` agent delegates to it |
+| `using-forge`, `forge-grill` | skills | loaded by the agent as needed |
+
+Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator here is a real agent with file and shell tools **denied**, so it is *structurally* forced to delegate to the `forge-worker` subagent instead of doing the work itself.
+
+### Codex
+
+| Piece | Installed as | Location |
+|---|---|---|
+| `forge`, `forge-worker` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
+| `using-forge`, `forge-grill` | skills | `~/.agents/skills/` (or `.agents/skills/` per project) |
+
+Codex support is the most partial of the three: Forge writes the agent `.toml` files but does not generate `AGENTS.md` or profiles, so wiring them into a Codex run may take manual steps. Treat Codex support as experimental.
+
+### Project vs user scope
+
+With `--scope user` (the default) the definitions live under your home directory and apply everywhere. With `--scope project` they live in the repo (`.claude/`, `.opencode/`, `.codex/`, `.agents/`) and apply only there. Invocation is identical either way.
+
 ## Local Development
 
 Forge uses [pnpm](https://pnpm.io) for development (pinned via `packageManager` in `package.json`, so `corepack enable` is enough — no global install needed). The published package is still consumed by end users via `npx`/npm, unchanged.
