@@ -17,6 +17,8 @@ const allowedProductKeys = new Set(['permissions', 'model', 'kind']);
 const allowedOpenCodeKeys = new Set([...allowedProductKeys, 'mode']);
 const openCodeModes = new Set<OpenCodeMode>(['primary', 'subagent', 'all']);
 const artifactKinds = new Set<SourceKind>(['agent', 'skill']);
+const defaultBodyBudget = 200;
+const bodyLineBudgets: Record<string, number> = { forge: 90, 'using-forge': 220, 'forge-worker': 300, 'forge-grill': 120, 'forge-adversary': 200 };
 
 export type ProcessOptions = {
   source: string;
@@ -118,6 +120,9 @@ function convertSource(source: SourceItem, sourceRoot: string): { item?: Canonic
   if (kind === undefined) diagnostics.push(diagnostic('error', 'MISSING_KIND', 'artifact kind is required (agent or skill)', { sourcePath: source.sourcePath }));
   else if (!artifactKinds.has(kind as SourceKind)) diagnostics.push(diagnostic('error', 'INVALID_KIND', 'artifact kind must be one of agent, skill', { sourcePath: source.sourcePath }));
   if (!source.body.trim()) diagnostics.push(diagnostic('error', 'EMPTY_BODY', 'artifact body is required', { sourcePath: source.sourcePath }));
+  const bodyLines = source.body.split('\n').length;
+  const bodyBudget = bodyLineBudgets[name ?? source.expectedName] ?? defaultBodyBudget;
+  if (bodyLines > bodyBudget) diagnostics.push(diagnostic('info', 'BODY_OVER_BUDGET', `artifact body is ${bodyLines} lines (soft budget ${bodyBudget}); keep always-loaded harness files small`, { sourcePath: source.sourcePath }));
   if (!name || !description || !artifactKinds.has(kind as SourceKind) || !source.body.trim() || diagnostics.some((item) => item.severity === 'error')) return { diagnostics };
   return {
     diagnostics,

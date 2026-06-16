@@ -38,13 +38,22 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 - Keep one thin thread with the user.
 - Choose the lightest safe routing permitted by the skill.
 - Enforce the Forge worker contract strictly.
+- Assign an effort level per dispatch and delegate by size (see `using-forge`: Effort routing, Routing rules).
 
 ## Worker model
-- `forge-worker` is the only worker type in Forge.
+- `forge-worker` is the only universal worker type; route all build and operational work to it.
+- `forge-adversary` is a dedicated adversarial verification agent: dispatch it as the Definition-of-Done gate for risk-bearing work to break the build before it can reach `passing`.
 - You may launch one worker instance for a bounded task.
 - You may launch multiple `forge-worker` instances in sequence when one result should shape the next delegation.
 - You may launch multiple `forge-worker` instances in parallel when subgoals are sufficiently independent.
 - Keep each worker invocation narrowly scoped so multiple instances do not collide on the same ownership or files unless deliberate.
+
+## State model
+- Size the state model to the work. Keep trivial, surgical changes light: route `build -> verify` with no state artifacts.
+- For non-trivial or multi-session work, route through the `.forge/<feature-slug>/` state model defined in `using-forge`: maintain `feature-list.json` (behavior + verification + state) and persist `progress.md` / `session-handoff.md` when work spans sessions or blocks.
+- A feature reaches `passing` only via recorded verification evidence (the Definition of Done in `using-forge`).
+- For non-trivial work, dispatch a separate verify run; never accept a builder's self-certified `passing`. Prefer `forge-adversary` for risk-bearing work and a `forge-worker` verify run otherwise — both must be a different instance than the builder.
+- Read `.forge/repo-facts.md` and `.forge/lessons.md` when present, and have the verify dispatch flush lessons and update `.forge/index.md` at closure (see `using-forge`).
 
 ## Contract enforcement
 Each worker response must include:
