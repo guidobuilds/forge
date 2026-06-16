@@ -161,6 +161,17 @@ test('processor rejects opencode mode on a skill-kind artifact', async () => {
   assert.ok(plan.diagnostics.some((item) => item.code === 'OPENCODE_MODE_ON_SKILL'));
 });
 
+test('processor flags an artifact body over its line budget as info, not error', async () => {
+  const root = await tempDir('forge-invalid-');
+  const bigBody = Array.from({ length: 250 }, (_, i) => `line ${i}`).join('\n');
+  await writeArtifact(root, 'big-artifact', 'name: big-artifact\ndescription: Big artifact\nkind: skill', bigBody);
+  const plan = await buildWritePlan({ source: root, platform: 'claude', scope: 'project', cwd: root });
+  const budgetInfo = plan.diagnostics.find((item) => item.code === 'BODY_OVER_BUDGET');
+  assert.ok(budgetInfo, 'expected BODY_OVER_BUDGET diagnostic');
+  assert.equal(budgetInfo!.severity, 'info');
+  assert.equal(plan.diagnostics.filter((item) => item.severity === 'error').length, 0);
+});
+
 test('per-platform kind override renders the alternate artifact kind', async () => {
   const root = await tempDir('forge-fixture-');
   const home = await tempHome();
@@ -260,7 +271,7 @@ test('install keeps non-interactive defaults when no flags are provided', async 
 test('install uses bundled Forge sources when --source is omitted', async () => {
   const output = await captureConsole(() => main(['install', '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 4 source\(s\), 4 output\(s\)/);
+  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/using-forge\/SKILL\.md/);
 });
@@ -437,16 +448,17 @@ test('manifest checksum reflects on-disk content, not pre-write content', async 
 
 test('discovers and dry-runs all bundled Forge artifacts', async () => {
   const root = process.cwd();
-  const expected = ['forge', 'forge-worker', 'using-forge', 'forge-grill'];
+  const expected = ['forge', 'forge-worker', 'using-forge', 'forge-grill', 'forge-adversary'];
   const discovered = await discoverSources(root);
   assert.equal(discovered.diagnostics.filter((item) => item.severity === 'error').length, 0);
   assert.deepEqual(new Set(discovered.sources.map((source) => source.expectedName)), new Set(expected));
 
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 4 source\(s\), 4 output\(s\)/);
+  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-worker\.md/);
+  assert.match(output.stdout, /\.opencode\/agents\/forge-adversary\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/using-forge\/SKILL\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/forge-grill\/SKILL\.md/);
 });
@@ -455,10 +467,11 @@ test('bundled forge artifact installs as a Claude skill, not a subagent', async 
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 4 source\(s\), 4 output\(s\)/);
+  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
   assert.match(output.stdout, /claude skill forge -> .*\.claude\/skills\/forge\/SKILL\.md/);
   assert.doesNotMatch(output.stdout, /\.claude\/agents\/forge\.md/);
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
+  assert.match(output.stdout, /claude agent forge-adversary -> .*\.claude\/agents\/forge-adversary\.md/);
 });
 
 test('compareSemver orders versions numerically', () => {

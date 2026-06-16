@@ -75,6 +75,11 @@ Avoid parallel dispatch when:
 - Prefer one bounded worker run when it is sufficient; add more runs only when they reduce ambiguity, risk, or elapsed time.
 - Do not let workers silently infer missing build-shaping goals.
 - If a worker returns `blocked`, decide whether to ask the user, refine the subgoal, or launch another worker run for more inspection.
+- Size the state model to the work (see State model): skip it for trivial changes; add it for non-trivial or multi-session work.
+- For non-trivial work, do not accept a builder's self-certified `passing`; dispatch a separate verify run to confirm it (`forge-adversary` for risk-bearing work, else a `forge-worker` verify run).
+- Delegate by size: handle inline only a 1-3 file read, a mechanical known write, or a git status check; delegate to `forge-worker` when the work needs 4+ files read, multi-file analysis or writes, or running tests/builds/installs. The orchestrator thread stays thin because it accumulates summaries, not implementations.
+- Assign an effort level per dispatch (see Effort routing).
+- When `.forge/repo-facts.md` or `.forge/lessons.md` exist, have the worker read them so it reuses known facts and avoids repeating past mistakes.
 
 ## Approval heuristics
 
@@ -87,16 +92,72 @@ Approvals depend on the action being authorized and the risk of that action, not
 - If the requested action is already explicit and low-risk, do not create artificial gates.
 - If a materially important decision is unresolved, use the worker contract to escalate it and keep the user thread in the orchestrator.
 
+## Effort routing
+
+Match model effort to the work, not the reverse — higher effort spends more reasoning and tool calls, not more speed, so over-spending wastes tokens and time for the same result. State an effort level in each dispatch:
+
+- **low**: `inspect`, `verify`, `operate`, and routine/mechanical `build`.
+- **medium**: most `build` and `plan`.
+- **high**: `design`, hard trade-offs, synthesis across many worker results, or genuinely novel build.
+
+When unsure, start low and escalate only if the result is insufficient. The host harness owns actual model selection; this is the routing intent the orchestrator states and the worker honors.
+
 ## Artifact toolkit
 
-Preferred durable artifacts remain:
+Preferred process artifacts (write when they help future runs or clarify approval state):
 
 - `.forge/<feature-slug>/explore.md`
 - `.forge/<feature-slug>/design.md`
 - `.forge/<feature-slug>/plan.md`
 - `.forge/<feature-slug>/build-log.md`
 
-Use them when they help future runs or clarify approval state. Skip them when they would add ceremony without reducing risk.
+State-model artifacts (the source of truth for non-trivial or multi-session work, see State model):
+
+- `.forge/<feature-slug>/feature-list.json` — unit-of-work ledger: `behavior` + `verification` + `state`
+- `.forge/<feature-slug>/verification.md` — recorded verification evidence (the Definition of Done store)
+- `.forge/<feature-slug>/progress.md` — session continuity log
+- `.forge/<feature-slug>/session-handoff.md` — cross-session / blocked handoff
+
+Project-scoped files (persist across features, not under a slug):
+
+- `.forge/repo-facts.md` — durable stack/commands/conventions/constraints (the standing "where to go" spec)
+- `.forge/lessons.md` — topic-keyed accumulated lessons (the Feedback ratchet)
+- `.forge/index.md` — one-line-per-slug cross-task ledger
+
+Skip any artifact when it would add ceremony without reducing risk. `forge-worker` owns the exact schema and templates.
+
+## State model (adaptive)
+
+Size the state model to the work so the lightest safe workflow stays the default.
+
+- **Trivial / surgical** (single-file, low-risk, obvious, no cross-session memory): no state artifacts. Route `build -> verify` (or `inspect -> build -> verify`). The builder may self-verify.
+- **Single non-trivial feature**: create `feature-list.json` and `verification.md`. A separate verify dispatch must record evidence before any feature reaches `passing`.
+- **Multi-feature / multi-session / blocked / handoff-likely**: also create `progress.md` and `session-handoff.md`; carry multiple `feature-list.json` entries with `dependencies`.
+
+Triggers:
+- Create `feature-list.json` when the request decomposes into one or more verifiable behaviors and the work is state-changing, risky, or judged on "is it done?".
+- Create `progress.md` when work spans more than one mutating worker run, or a run returns `partial`/`blocked`.
+- Create `session-handoff.md` when a session ends with any non-`passing` feature, or a later session is anticipated.
+- Bootstrap `.forge/repo-facts.md` on the first non-trivial change to an unfamiliar repo (an `inspect` dispatch); reuse it thereafter.
+- Record lessons in `.forge/lessons.md` after any run that made a decision, fixed a non-obvious bug, set a convention, or hit a failure.
+- Never create state artifacts for read-only inspection or one-shot obvious edits.
+
+Feature `state` is one of `not_started | active | blocked | passing`. The orchestrator owns transitions: a builder may move `not_started -> active`, but only a verify dispatch (`forge-adversary` or a `forge-worker` verify run) moves a feature to `passing` (or `-> blocked` on failure).
+
+Closure: when a feature reaches `passing`, the verify dispatch flushes durable lessons to `.forge/lessons.md` and appends a line to `.forge/index.md`. When all features in a slug are `passing` and their `archiveWhen` conditions hold, the slug may be archived under `.forge/_archive/<slug>/`.
+
+## Definition of Done
+
+A feature's `state` may become `passing` only when ALL hold:
+
+1. its `verification` command was actually run,
+2. the result is recorded in `.forge/<feature-slug>/verification.md` (command + output excerpt + pass verdict + timestamp),
+3. `evidence` in `feature-list.json` points to that entry,
+4. every `id` in its `dependencies` is already `passing`.
+
+No feature moves to `passing` on assertion alone, and never by weakening, deleting, skipping, or stubbing the check; the recorded output must actually exercise the named `behavior`. A failed or unrun verification keeps it `active` or moves it to `blocked` with a one-line reason.
+
+Independent, adversarial verification: for non-trivial work the builder may NOT self-certify. Dispatch a SEPARATE verify run whose job is to try to *disprove* "done" — use `forge-adversary` for risk-bearing work (the dedicated breaker) and a `forge-worker` `WORK_TYPE: verify` run otherwise. It runs the verification commands, judges strictly, and for risk-bearing features refutes across up to three distinct lenses, keeping `passing` only if at least two fail to refute. It writes `verification.md` (logging refuted/uncertain candidates too) and flips states. Build and verify are different instances. Trivial-tier work is exempt.
 
 ## Contract enforcement
 

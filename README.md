@@ -62,6 +62,21 @@ These notes are useful for:
 
 Small, obvious changes do not need ceremony. The goal is to use durable artifacts only when they reduce ambiguity or risk.
 
+### State model for non-trivial work
+
+For non-trivial or multi-session work, Forge keeps a small state model under `.forge/<feature-slug>/`, sized to the task:
+
+- `feature-list.json` — the unit-of-work ledger. Each feature carries the triple `behavior` + `verification` (a runnable command) + `state` (`not_started | active | blocked | passing`).
+- `verification.md` — recorded verification evidence: the command, its output, and a pass/fail verdict.
+- `progress.md` / `session-handoff.md` — session continuity and handoff, written when work spans sessions or blocks.
+
+Two rules make "done" mean done:
+
+- **Definition of Done.** A feature only reaches `passing` once its verification command was actually run and the evidence is recorded in `verification.md`. No feature is marked done on assertion alone.
+- **Independent verification.** For non-trivial work the builder does not certify its own work. The orchestrator dispatches a separate `forge-worker` verify run that re-runs the checks and flips the state.
+
+Trivial, surgical changes skip all of this and stay on the `build -> verify` path.
+
 ## Supported Agents
 
 Forge currently installs support for:
@@ -112,10 +127,11 @@ Forge installs the **same operating model** on every agent, but **how you invoke
 
 ### The pieces
 
-Forge is one orchestrator plus one worker, with two supporting skills:
+Forge is one orchestrator, a universal worker, and a dedicated adversary, with two supporting skills:
 
 - **`forge`** — the orchestrator. It talks to you, decides how much process a task needs, and delegates the real work. It does not edit code itself.
 - **`forge-worker`** — the worker. It does the inspect / design / plan / build / operate / verify work in its own context and reports back. This is what keeps the orchestrator's context clean.
+- **`forge-adversary`** — the breaker. After a build, the orchestrator dispatches it to *try to break* the work — logically and technically (logic/requirements, runtime, security, performance). It gates the Definition of Done: a confirmed, reproducible break keeps the feature out of `passing`. It complements `forge-grill`, which grills plans *before* building.
 - **`using-forge`** — the shared operating-model skill the orchestrator follows.
 - **`forge-grill`** — an orchestrator mode for stress-testing a plan or design before building.
 
@@ -129,6 +145,7 @@ What changes per platform is the **kind** each piece is installed as, and theref
 | `forge-grill` | skill | type `/forge-grill` |
 | `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
 | `forge-worker` | subagent | the main thread delegates to it; or say "use the forge-worker subagent" |
+| `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
 
 Start a session by typing **`/forge`**. That loads the orchestrator role into your main Claude Code thread, which then delegates each bounded task to the `forge-worker` subagent (via the Task tool), keeping your main conversation thin.
 
@@ -140,6 +157,7 @@ Start a session by typing **`/forge`**. That loads the orchestrator role into yo
 |---|---|---|
 | `forge` | primary agent | switch your active agent to `forge` |
 | `forge-worker` | subagent | the `forge` agent delegates to it |
+| `forge-adversary` | subagent | the `forge` agent delegates to it to gate risk-bearing work after build |
 | `using-forge`, `forge-grill` | skills | loaded by the agent as needed |
 
 Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator here is a real agent with file and shell tools **denied**, so it is *structurally* forced to delegate to the `forge-worker` subagent instead of doing the work itself.
@@ -148,7 +166,7 @@ Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator h
 
 | Piece | Installed as | Location |
 |---|---|---|
-| `forge`, `forge-worker` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
+| `forge`, `forge-worker`, `forge-adversary` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
 | `using-forge`, `forge-grill` | skills | `~/.agents/skills/` (or `.agents/skills/` per project) |
 
 Codex support is the most partial of the three: Forge writes the agent `.toml` files but does not generate `AGENTS.md` or profiles, so wiring them into a Codex run may take manual steps. Treat Codex support as experimental.
@@ -156,6 +174,25 @@ Codex support is the most partial of the three: Forge writes the agent `.toml` f
 ### Project vs user scope
 
 With `--scope user` (the default) the definitions live under your home directory and apply everywhere. With `--scope project` they live in the repo (`.claude/`, `.opencode/`, `.codex/`, `.agents/`) and apply only there. Invocation is identical either way.
+
+## Optional: enforce the gate with hooks (Claude Code)
+
+Forge's Definition of Done is followed by instruction, not enforced — strong models honor the gate from the operating model alone. If you want the verification gate enforced *mechanically* on Claude Code (e.g. for unattended runs), add an opt-in hook to your `.claude/settings.json`. Keep it thin: a safety net for the one invariant that must hold, not a compliance layer.
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "<your project's verification command, e.g. pnpm test --silent>" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "<your fast type/lint check, e.g. pnpm typecheck>" } ] }
+    ]
+  }
+}
+```
+
+The **Stop** hook re-runs your checks when the agent tries to finish, so a failing gate blocks a premature "done"; the **PostToolUse** hook surfaces type/lint errors after each edit for mid-task self-correction. Point the Stop hook at fast unit checks and leave slow suites to CI. This is intentionally optional — reach for it only when you want the gate enforced without you in the room.
 
 ## Local Development
 
