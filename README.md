@@ -2,7 +2,7 @@
 
 Forge is a personal project for working with code agents more reliably.
 
-It started as a way to get better results from OpenCode, and now also supports Codex and Claude Code. The idea is to give agents a lightweight operating model for turning vague software requests into smaller, safer, verifiable changes without adding a heavy process around them.
+It started as a way to get better results from OpenCode, and now also supports Claude Code, Codex and Grok Build. The idea is to give agents a lightweight operating model for turning vague software requests into smaller, safer, verifiable changes without adding a heavy process around them.
 
 Forge is experimental. It is shaped by hands-on use, and the workflow may change as I learn what works and what does not.
 
