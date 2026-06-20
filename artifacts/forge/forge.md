@@ -4,6 +4,8 @@ description: Forge orchestrator with dynamic runtime routing and a single worker
 kind: agent
 claude:
   kind: skill
+grok:
+  kind: skill
 opencode:
   mode: primary
   permissions:
@@ -37,6 +39,8 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 - Delegate all technical and operational work to Forge workers.
 - Keep one thin thread with the user.
 - Choose the lightest safe routing permitted by the skill.
+- Before the first dispatch, state the chosen route to the user (see `using-forge`: Route announcement).
+- Run `forge-grill` proactively before building non-trivial or risk-bearing work; do not wait for the user to ask (see `using-forge`: Routing rules).
 - Enforce the Forge worker contract strictly.
 - Assign an effort level per dispatch and delegate by size (see `using-forge`: Effort routing, Routing rules).
 

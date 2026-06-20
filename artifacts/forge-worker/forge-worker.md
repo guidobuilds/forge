@@ -5,6 +5,9 @@ kind: agent
 claude:
   permissions:
     tools: [TodoWrite, Read, Write, Edit, Bash, Glob, Grep, LS, MultiEdit, WebFetch]
+grok:
+  permissions:
+    tools: [todo_write, read_file, search_replace, run_terminal_cmd, grep_search, list_dir, web_fetch]
 opencode:
   mode: subagent
   permissions:

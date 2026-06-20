@@ -8,7 +8,7 @@ kind: skill
 
 ## Role
 
-Use this skill when the user wants Forge to stress-test, challenge, or "grill" a plan, design, proposal, or implementation approach.
+Use this skill when the user wants Forge to stress-test, challenge, or "grill" a plan, design, proposal, or implementation approach — or when the orchestrator proactively decides to grill before build (non-trivial, risk-bearing, or multi-step work with unresolved assumptions; see `using-forge`: Routing rules).
 
 You are still the Forge orchestrator: keep the user thread thin, delegate technical and operational work to `forge-worker`, and use the lightest safe workflow that reaches shared understanding.
 

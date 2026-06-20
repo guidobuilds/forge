@@ -1,5 +1,7 @@
 .forge/
-workdir/
+.claude/
+.grok/
 .opencode/
+workdir/
 dist/
 node_modules/

@@ -8,6 +8,7 @@ import test, { after } from 'node:test';
 import { promisify } from 'node:util';
 import { renderClaudeAgent, renderClaudeSkill } from '../src/adapters/claude.js';
 import { renderCodexAgent, renderCodexSkill } from '../src/adapters/codex.js';
+import { renderGrokAgent, renderGrokSkill } from '../src/adapters/grok.js';
 import { renderOpenCodeAgent, renderOpenCodeSkill } from '../src/adapters/opencode.js';
 import { main } from '../src/cli.js';
 import { discoverSources } from '../src/discovery.js';
@@ -30,7 +31,8 @@ const agent: CanonicalArtifact = {
   sourcePath: 'artifacts/test-agent/test-agent.md',
   claude: { permissions: { tools: ['Read', 'Write'] }, model: 'sonnet' },
   opencode: { permissions: { read: true }, model: 'opencode-model', mode: 'subagent' },
-  codex: { permissions: { sandbox_mode: 'workspace-write' }, model: 'gpt-5.1' }
+  codex: { permissions: { sandbox_mode: 'workspace-write' }, model: 'gpt-5.1' },
+  grok: { permissions: { tools: ['read_file', 'search_replace'] }, model: 'grok-build' }
 };
 
 const skill: CanonicalArtifact = {
@@ -41,7 +43,8 @@ const skill: CanonicalArtifact = {
   sourcePath: 'artifacts/test-skill/test-skill.md',
   claude: { permissions: { 'allowed-tools': ['Read'] } },
   opencode: { model: 'ignored' },
-  codex: { permissions: { any: true } }
+  codex: { permissions: { any: true } },
+  grok: { model: 'grok-build' }
 };
 
 test('parses frontmatter and body', () => {
@@ -121,15 +124,57 @@ test('claude skill drops model and emits ignored diagnostic', () => {
   assert.ok(rendered.diagnostics.some((item) => item.code === 'CLAUDE_SKILL_MODEL_IGNORED'));
 });
 
+test('grok agent emits tools as a YAML sequence, not a comma-joined string', () => {
+  const rendered = renderGrokAgent(agent);
+  assert.match(rendered.content, /model: grok-build/);
+  // tools must appear as a YAML list (- item), not a comma-joined value
+  assert.match(rendered.content, /tools:/);
+  assert.match(rendered.content, /- read_file/);
+  assert.match(rendered.content, /- search_replace/);
+  assert.doesNotMatch(rendered.content, /tools: read_file, search_replace/);
+  assert.equal(rendered.diagnostics.length, 0);
+});
+
+test('grok agent reports unknown tools and unknown models as warnings', () => {
+  const odd: CanonicalArtifact = {
+    name: 'odd',
+    description: 'agent',
+    kind: 'agent',
+    body: 'body',
+    sourcePath: 'artifacts/odd/odd.md',
+    grok: { model: 'gpt-never', permissions: { tools: ['read_file', 'not_a_grok_tool'] } }
+  };
+  const rendered = renderGrokAgent(odd);
+  assert.ok(rendered.diagnostics.some((item) => item.code === 'GROK_UNKNOWN_TOOL' && item.severity === 'warning'));
+  assert.ok(rendered.diagnostics.some((item) => item.code === 'GROK_UNKNOWN_MODEL' && item.severity === 'warning'));
+});
+
+test('grok agent omits tools when no permissions are provided', () => {
+  const minimal: CanonicalArtifact = { name: 'a', description: 'b', kind: 'agent', body: 'body', sourcePath: 'artifacts/a/a.md' };
+  const rendered = renderGrokAgent(minimal);
+  assert.doesNotMatch(rendered.content, /tools:/);
+  assert.equal(rendered.diagnostics.length, 0);
+});
+
+test('grok skill emits only name and description, drops model and permissions', () => {
+  const rendered = renderGrokSkill(skill);
+  assert.match(rendered.content, /name: test-skill/);
+  assert.doesNotMatch(rendered.content, /model:/);
+  assert.doesNotMatch(rendered.content, /tools:/);
+  assert.ok(rendered.diagnostics.some((item) => item.code === 'GROK_SKILL_MODEL_IGNORED'));
+});
+
 test('processor validates sources and generates dry-run plan paths', async () => {
   const root = await fixtureRoot();
   const home = await tempHome();
   const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'user', home, cwd: root });
   assert.equal(plan.diagnostics.filter((item) => item.severity === 'error').length, 0);
-  assert.equal(plan.files.length, 6);
+  assert.equal(plan.files.length, 8);
   assert.ok(plan.files.some((file) => file.path.endsWith('.config/opencode/agents/test-agent.md')));
   assert.ok(plan.files.some((file) => file.path.endsWith('.codex/agents/test-agent.toml')));
   assert.ok(plan.files.some((file) => file.path.endsWith('.agents/skills/test-skill/SKILL.md')));
+  assert.ok(plan.files.some((file) => file.path.endsWith('.grok/agents/test-agent.md')));
+  assert.ok(plan.files.some((file) => file.path.endsWith('.grok/skills/test-skill/SKILL.md')));
 });
 
 test('processor rejects invalid fields and name mismatch', async () => {
@@ -263,9 +308,11 @@ test('install keeps non-interactive defaults when no flags are provided', async 
   const root = await fixtureRoot();
   const output = await captureConsole(() => main(['install', '--source', root, '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 2 source\(s\), 6 output\(s\)/);
+  assert.match(output.stdout, /install: 2 source\(s\), 8 output\(s\)/);
   assert.match(output.stdout, /\.config\/opencode\/agents\/test-agent\.md/);
   assert.match(output.stdout, /\.agents\/skills\/test-skill\/SKILL\.md/);
+  assert.match(output.stdout, /\.grok\/agents\/test-agent\.md/);
+  assert.match(output.stdout, /\.grok\/skills\/test-skill\/SKILL\.md/);
 });
 
 test('install uses bundled Forge sources when --source is omitted', async () => {
@@ -472,6 +519,19 @@ test('bundled forge artifact installs as a Claude skill, not a subagent', async 
   assert.doesNotMatch(output.stdout, /\.claude\/agents\/forge\.md/);
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
   assert.match(output.stdout, /claude agent forge-adversary -> .*\.claude\/agents\/forge-adversary\.md/);
+});
+
+test('bundled forge artifact installs as a Grok skill, with worker and adversary as subagents', async () => {
+  const root = process.cwd();
+  const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'grok', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
+  assert.match(output.stdout, /grok skill forge -> .*\.grok\/skills\/forge\/SKILL\.md/);
+  assert.doesNotMatch(output.stdout, /\.grok\/agents\/forge\.md/);
+  assert.match(output.stdout, /grok agent forge-worker -> .*\.grok\/agents\/forge-worker\.md/);
+  assert.match(output.stdout, /grok agent forge-adversary -> .*\.grok\/agents\/forge-adversary\.md/);
+  assert.match(output.stdout, /grok skill forge-grill -> .*\.grok\/skills\/forge-grill\/SKILL\.md/);
+  assert.match(output.stdout, /grok skill using-forge -> .*\.grok\/skills\/using-forge\/SKILL\.md/);
 });
 
 test('compareSemver orders versions numerically', () => {

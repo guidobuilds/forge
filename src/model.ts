@@ -1,4 +1,4 @@
-export type Platform = 'opencode' | 'claude' | 'codex';
+export type Platform = 'opencode' | 'claude' | 'codex' | 'grok';
 export type PlatformArg = Platform | 'all';
 export type Scope = 'user' | 'project';
 export type SourceKind = 'agent' | 'skill';
@@ -26,6 +26,7 @@ export type CanonicalArtifact = {
   claude?: ProductConfig;
   opencode?: OpenCodeConfig;
   codex?: ProductConfig;
+  grok?: ProductConfig;
 };
 
 export type Diagnostic = {
@@ -67,7 +68,7 @@ export type SourceItem = {
   supportFiles?: string[];
 };
 
-export const platforms: Platform[] = ['opencode', 'claude', 'codex'];
+export const platforms: Platform[] = ['opencode', 'claude', 'codex', 'grok'];
 
 export function isPlatform(value: string): value is Platform {
   return platforms.includes(value as Platform);

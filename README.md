@@ -49,6 +49,8 @@ build -> verify
 
 There is no mandatory lifecycle. Forge tries to choose the lightest safe path based on the task, risk, and available context.
 
+Before delegating, the orchestrator states the chosen route to the user — the work types it plans to run, whether `forge-grill` runs before build, and why it is the lightest safe path for that request.
+
 ## Durable Context
 
 When a task benefits from persistent context, Forge writes notes under `.forge/<feature-slug>/`.
@@ -84,6 +86,7 @@ Forge currently installs support for:
 - OpenCode
 - Codex
 - Claude Code
+- Grok Build
 
 The same operating model is shared across all supported agents so the workflow stays mostly consistent even when the underlying tool changes.
 
@@ -133,7 +136,7 @@ Forge is one orchestrator, a universal worker, and a dedicated adversary, with t
 - **`forge-worker`** — the worker. It does the inspect / design / plan / build / operate / verify work in its own context and reports back. This is what keeps the orchestrator's context clean.
 - **`forge-adversary`** — the breaker. After a build, the orchestrator dispatches it to *try to break* the work — logically and technically (logic/requirements, runtime, security, performance). It gates the Definition of Done: a confirmed, reproducible break keeps the feature out of `passing`. It complements `forge-grill`, which grills plans *before* building.
 - **`using-forge`** — the shared operating-model skill the orchestrator follows.
-- **`forge-grill`** — an orchestrator mode for stress-testing a plan or design before building.
+- **`forge-grill`** — an orchestrator mode for stress-testing a plan or design before building. The orchestrator invokes it proactively before non-trivial or risk-bearing builds; also available as `/forge-grill` for manual use.
 
 What changes per platform is the **kind** each piece is installed as, and therefore how you trigger it.
 
@@ -173,7 +176,23 @@ Codex support is the most partial of the three: Forge writes the agent `.toml` f
 
 ### Project vs user scope
 
-With `--scope user` (the default) the definitions live under your home directory and apply everywhere. With `--scope project` they live in the repo (`.claude/`, `.opencode/`, `.codex/`, `.agents/`) and apply only there. Invocation is identical either way.
+### Grok Build
+
+| Piece | Installed as | How you invoke it |
+|---|---|---|
+| `forge` | skill | type `/forge` in the prompt |
+| `forge-grill` | skill | type `/forge-grill` |
+| `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
+| `forge-worker` | subagent | the main thread delegates to it via the `task` tool |
+| `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
+
+Start a session by typing **`/forge`**. Like Claude Code, the orchestrator runs as a skill in the main Grok session, which then delegates bounded work to the `forge-worker` subagent. Grok uses its own tool IDs (`run_terminal_cmd`, `grep_search`, `search_replace`, etc.) — the installer translates the worker's toolset automatically.
+
+> **Note:** Grok Build already auto-discovers skills and agents from `~/.claude/` for compatibility. If you have a Claude Code install, Grok may partially pick up those files — but with Claude tool names that Grok doesn't recognize. A native Grok install (`--platform grok`) writes `.grok/`-scoped files with the correct Grok tool IDs.
+
+### Project vs user scope
+
+With `--scope user` (the default) the definitions live under your home directory and apply everywhere. With `--scope project` they live in the repo (`.claude/`, `.opencode/`, `.codex/`, `.agents/`, `.grok/`) and apply only there. Invocation is identical either way.
 
 ## Optional: enforce the gate with hooks (Claude Code)
 

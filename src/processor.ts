@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { renderClaudeAgent, renderClaudeSkill } from './adapters/claude.js';
 import { renderCodexAgent, renderCodexSkill } from './adapters/codex.js';
+import { renderGrokAgent, renderGrokSkill } from './adapters/grok.js';
 import { renderOpenCodeAgent, renderOpenCodeSkill } from './adapters/opencode.js';
 import { diagnostic } from './diagnostics.js';
 import { discoverSources } from './discovery.js';
@@ -11,8 +12,8 @@ import { resolveOutputPath } from './paths.js';
 import { isPlatform, platforms, type CanonicalArtifact, type Diagnostic, type FileStatus, type OpenCodeMode, type OutputFile, type PendingDecisions, type Platform, type PlatformArg, type Scope, type SourceItem, type SourceKind, type WritePlan } from './model.js';
 
 const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const platformKeys = new Set(['claude', 'opencode', 'codex']);
-const allowedTopLevel = new Set(['name', 'description', 'kind', 'claude', 'opencode', 'codex']);
+const platformKeys = new Set(['claude', 'opencode', 'codex', 'grok']);
+const allowedTopLevel = new Set(['name', 'description', 'kind', 'claude', 'opencode', 'codex', 'grok']);
 const allowedProductKeys = new Set(['permissions', 'model', 'kind']);
 const allowedOpenCodeKeys = new Set([...allowedProductKeys, 'mode']);
 const openCodeModes = new Set<OpenCodeMode>(['primary', 'subagent', 'all']);
@@ -134,7 +135,8 @@ function convertSource(source: SourceItem, sourceRoot: string): { item?: Canonic
       sourcePath: path.relative(path.resolve(sourceRoot), source.sourcePath),
       claude: productConfig(data.claude),
       opencode: productConfig(data.opencode),
-      codex: productConfig(data.codex)
+      codex: productConfig(data.codex),
+      grok: productConfig(data.grok)
     }
   };
 }
@@ -145,8 +147,8 @@ function productConfig(value: unknown) {
 
 function renderFile(platform: Platform, kind: SourceKind, artifact: CanonicalArtifact, options: ProcessOptions, diagnostics: Diagnostic[]): OutputFile {
   const rendered = kind === 'agent'
-    ? platform === 'opencode' ? renderOpenCodeAgent(artifact) : platform === 'claude' ? renderClaudeAgent(artifact) : renderCodexAgent(artifact)
-    : platform === 'opencode' ? renderOpenCodeSkill(artifact) : platform === 'claude' ? renderClaudeSkill(artifact) : renderCodexSkill(artifact);
+    ? platform === 'opencode' ? renderOpenCodeAgent(artifact) : platform === 'claude' ? renderClaudeAgent(artifact) : platform === 'grok' ? renderGrokAgent(artifact) : renderCodexAgent(artifact)
+    : platform === 'opencode' ? renderOpenCodeSkill(artifact) : platform === 'claude' ? renderClaudeSkill(artifact) : platform === 'grok' ? renderGrokSkill(artifact) : renderCodexSkill(artifact);
   diagnostics.push(...rendered.diagnostics);
   return { platform, kind, scope: options.scope, name: artifact.name, sourcePath: artifact.sourcePath, path: resolveOutputPath(platform, kind, options.scope, artifact.name, options.cwd, options.home), content: rendered.content };
 }

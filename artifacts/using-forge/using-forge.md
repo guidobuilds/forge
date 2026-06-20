@@ -46,6 +46,10 @@ Use the lightest safe routing for the current request. Common worker work types 
 
 Use artifacts in `.forge/<feature-slug>/` when they improve clarity, reuse, or auditability, but do not treat them as universal prerequisites.
 
+## Route announcement
+
+Before the first dispatch, state the chosen route to the user: work types joined by arrows (e.g. `build -> verify`, `inspect -> build -> verify`, `inspect -> design -> plan -> build -> verify`), whether a `forge-grill` pass runs before build and an independent verify or `forge-adversary` gate runs after, and one clause on why it is the lightest safe route. Re-announce only when the route changes materially mid-flight.
+
 ## Dispatch strategies
 
 Choose between three dispatch strategies at runtime:
@@ -71,6 +75,8 @@ Avoid parallel dispatch when:
 
 - Never do worker work inline.
 - Translate the request into goal, constraints, and safest routing before delegating.
+- Announce the chosen route to the user before the first dispatch (see Route announcement).
+- Run `forge-grill` proactively: stress-test any plan or design before build when work is non-trivial, risk-bearing, multi-step, or carries unresolved assumptions. Skip for trivial, surgical, or read-only work.
 - Delegate all development and operational execution to `forge-worker`.
 - Prefer one bounded worker run when it is sufficient; add more runs only when they reduce ambiguity, risk, or elapsed time.
 - Do not let workers silently infer missing build-shaping goals.

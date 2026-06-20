@@ -14,11 +14,13 @@ export function resolveOutputPath(platform: Platform, kind: SourceKind, scope: S
 function userBase(platform: Platform, kind: SourceKind, home: string): string {
   if (platform === 'opencode') return path.join(home, '.config', 'opencode', kind === 'agent' ? 'agents' : 'skills');
   if (platform === 'claude') return path.join(home, '.claude', kind === 'agent' ? 'agents' : 'skills');
+  if (platform === 'grok') return path.join(home, '.grok', kind === 'agent' ? 'agents' : 'skills');
   return kind === 'agent' ? path.join(home, '.codex', 'agents') : path.join(home, '.agents', 'skills');
 }
 
 function projectBase(platform: Platform, kind: SourceKind, cwd: string): string {
   if (platform === 'opencode') return path.join(cwd, '.opencode', kind === 'agent' ? 'agents' : 'skills');
   if (platform === 'claude') return path.join(cwd, '.claude', kind === 'agent' ? 'agents' : 'skills');
+  if (platform === 'grok') return path.join(cwd, '.grok', kind === 'agent' ? 'agents' : 'skills');
   return kind === 'agent' ? path.join(cwd, '.codex', 'agents') : path.join(cwd, '.agents', 'skills');
 }

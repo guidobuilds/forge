@@ -250,10 +250,11 @@ async function promptForMissingInstallOptions(options: CliOptions, promptIO: Pro
       message: 'Install Forge for which coding agent?',
       initialValue: 'all',
       options: [
-        { value: 'all', label: 'All supported agents', hint: 'OpenCode, Codex, and Claude Code' },
+        { value: 'all', label: 'All supported agents', hint: 'OpenCode, Codex, Claude Code, and Grok Build' },
         { value: 'opencode', label: 'OpenCode' },
         { value: 'codex', label: 'Codex' },
-        { value: 'claude', label: 'Claude Code' }
+        { value: 'claude', label: 'Claude Code' },
+        { value: 'grok', label: 'Grok Build' }
       ],
       ...io
     });
@@ -347,9 +348,9 @@ function readPackageVersion(): string {
 }
 
 function showUsage(): void {
-  console.log('Usage: forge-ai install [--platform opencode|claude|codex|all] [--scope user|project] [--source <dir>] [--dry-run] [--force] [--yes]');
-  console.log('       forge-ai update [--platform opencode|claude|codex|all] [--scope user|project] [--source <dir>] [--dry-run] [--no-prune] [--yes]');
-  console.log('       forge-ai validate [--platform opencode|claude|codex|all] [--source <dir>]');
+  console.log('Usage: forge-ai install [--platform opencode|claude|codex|grok|all] [--scope user|project] [--source <dir>] [--dry-run] [--force] [--yes]');
+  console.log('       forge-ai update [--platform opencode|claude|codex|grok|all] [--scope user|project] [--source <dir>] [--dry-run] [--no-prune] [--yes]');
+  console.log('       forge-ai validate [--platform opencode|claude|codex|grok|all] [--source <dir>]');
   console.log('       forge-ai self-update [--to <version>] [--dry-run] [--skip-spec-update]');
   console.log('');
   console.log('Global flags: --no-update-check (also FORGE_NO_UPDATE_CHECK=1 or CI=true)');
