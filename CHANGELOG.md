@@ -9,14 +9,20 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-20
+
+### Added
+
+- **Grok Build (`--platform grok`) as a first-class target.** `forge`, `forge-grill`, and `using-forge` install as Grok skills under `.grok/skills/<name>/SKILL.md`; `forge-worker` and `forge-adversary` install as Grok subagents under `.grok/agents/<name>.md`. Grok's built-in tool IDs (`run_terminal_cmd`, `grep_search`, `search_replace`, etc.) are used in the worker and adversary toolsets, replacing the Claude-specific names. Included in `--platform all`. Grok Build v0.2.56+ required.
+
 ### Changed
 
 - **Orchestrator route announcement**: before the first dispatch, the orchestrator now states the chosen route to the user — work types joined by arrows (e.g. `build -> verify`, `inspect -> build -> verify`, `inspect -> design -> plan -> build -> verify`), whether a `forge-grill` pass runs before build and an independent verify or `forge-adversary` gate runs after, and one clause on why it is the lightest safe route. Re-announced only when the route changes materially mid-flight.
 - **Proactive `forge-grill`**: the orchestrator now runs `forge-grill` proactively before build for non-trivial, risk-bearing, or multi-step work with unresolved assumptions. Previously grill was effectively opt-in (user-triggered via `/forge-grill`). Trivial, surgical, and read-only work still skips grill.
 
-### Added
+### Migration from 0.4.0
 
-- **Grok Build (`--platform grok`) as a first-class target.** `forge`, `forge-grill`, and `using-forge` install as Grok skills under `.grok/skills/<name>/SKILL.md`; `forge-worker` and `forge-adversary` install as Grok subagents under `.grok/agents/<name>.md`. Grok's built-in tool IDs (`run_terminal_cmd`, `grep_search`, `search_replace`, etc.) are used in the worker and adversary toolsets, replacing the Claude-specific names. Included in `--platform all`. Grok Build v0.2.56+ required.
+- Run `npx @guidobuilds/forge-ai update` to add the new `forge-grill` and `using-forge` prompt changes and the Grok Build artifacts. No breaking changes to the CLI, state files, or existing Claude/OpenCode/Codex installs.
 
 ## [0.4.0] - 2026-06-16
 
