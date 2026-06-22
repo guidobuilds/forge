@@ -130,10 +130,11 @@ Forge installs the **same operating model** on every agent, but **how you invoke
 
 ### The pieces
 
-Forge is one orchestrator, a universal worker, and a dedicated adversary, with two supporting skills:
+Forge is one orchestrator, a two-tier worker model, and a dedicated adversary, with two supporting skills:
 
 - **`forge`** — the orchestrator. It talks to you, decides how much process a task needs, and delegates the real work. It does not edit code itself.
-- **`forge-worker`** — the worker. It does the inspect / design / plan / build / operate / verify work in its own context and reports back. This is what keeps the orchestrator's context clean.
+- **`forge-worker`** — the coordinator worker. It executes bounded subgoals and spawns `forge-worker-leaf` when context would grow too large (~100k-token peak).
+- **`forge-worker-leaf`** — the terminal worker. It runs one bounded shard with no sub-delegation.
 - **`forge-adversary`** — the breaker. After a build, the orchestrator dispatches it to *try to break* the work — logically and technically (logic/requirements, runtime, security, performance). It gates the Definition of Done: a confirmed, reproducible break keeps the feature out of `passing`. It complements `forge-grill`, which grills plans *before* building.
 - **`using-forge`** — the shared operating-model skill the orchestrator follows.
 - **`forge-grill`** — an orchestrator mode for stress-testing a plan or design before building. The orchestrator invokes it proactively before non-trivial or risk-bearing builds; also available as `/forge-grill` for manual use.
@@ -147,19 +148,21 @@ What changes per platform is the **kind** each piece is installed as, and theref
 | `forge` | skill | type `/forge` in the prompt |
 | `forge-grill` | skill | type `/forge-grill` |
 | `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
-| `forge-worker` | subagent | the main thread delegates to it; or say "use the forge-worker subagent" |
+| `forge-worker` | subagent | coordinator; main thread delegates via `Agent` (or legacy `Task`) |
+| `forge-worker-leaf` | subagent | terminal shard; spawned by `forge-worker` (or orchestrator on Codex) |
 | `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
 
-Start a session by typing **`/forge`**. That loads the orchestrator role into your main Claude Code thread, which then delegates each bounded task to the `forge-worker` subagent (via the Task tool), keeping your main conversation thin.
+Start a session by typing **`/forge`**. That loads the orchestrator role into your main Claude Code thread, which delegates each bounded task to `forge-worker`, which may spawn `forge-worker-leaf` for heavy inspect/build shards. Requires **Claude Code v2.1.172+** for nested sub-agents.
 
-> Why a skill and not an agent on Claude? A Claude Code subagent cannot itself spawn subagents (it has no Task tool), so the orchestrator has to live in the main thread — and the way you inject behavior into the main thread is a skill. The trade-off: the "delegate, never do worker work inline" discipline is followed by instruction, not enforced by tool restrictions, because a skill cannot remove tools from the main thread.
+> Why a skill and not an agent on Claude? The main thread retains `Agent`/`Task` and can delegate. A skill injects orchestrator behavior without replacing the main agent. The trade-off: "delegate, never do worker work inline" is followed by instruction at the orchestrator layer, not by tool restrictions — but `forge-worker` **can** structurally spawn leaves when given `Agent` in its tool list.
 
 ### OpenCode
 
 | Piece | Installed as | How you invoke it |
 |---|---|---|
 | `forge` | primary agent | switch your active agent to `forge` |
-| `forge-worker` | subagent | the `forge` agent delegates to it |
+| `forge-worker` | subagent | coordinator; `forge` delegates with `task: allow` |
+| `forge-worker-leaf` | subagent | terminal shard; spawned by coordinator (`task: deny`) |
 | `forge-adversary` | subagent | the `forge` agent delegates to it to gate risk-bearing work after build |
 | `using-forge`, `forge-grill` | skills | loaded by the agent as needed |
 
@@ -183,7 +186,8 @@ Codex support is the most partial of the three: Forge writes the agent `.toml` f
 | `forge` | skill | type `/forge` in the prompt |
 | `forge-grill` | skill | type `/forge-grill` |
 | `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
-| `forge-worker` | subagent | the main thread delegates to it via the `task` tool |
+| `forge-worker` | subagent | coordinator; main thread delegates via `task` |
+| `forge-worker-leaf` | subagent | terminal shard; spawned by coordinator |
 | `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
 
 Start a session by typing **`/forge`**. Like Claude Code, the orchestrator runs as a skill in the main Grok session, which then delegates bounded work to the `forge-worker` subagent. Grok uses its own tool IDs (`run_terminal_cmd`, `grep_search`, `search_replace`, etc.) — the installer translates the worker's toolset automatically.

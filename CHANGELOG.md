@@ -9,6 +9,23 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-22
+
+### Added
+
+- **`forge-worker-leaf` agent** — terminal worker for bounded subgoal shards at `DISPATCH_DEPTH: 2`. No spawn tools (`task: deny` on OpenCode; no `Agent`/`task` on Claude/Grok). Installed alongside `forge-worker` on all platforms.
+- **Worker sub-delegation** — `forge-worker` is now a coordinator that spawns `forge-worker-leaf` when context triggers fire (≥ 8 file reads, ≥ 6 searches, ≥ 20 tool calls, ≥ 5 files to build, or `DELEGATION: required`). Extended worker contract: `DISPATCH_DEPTH`, `WORKER_ROLE`, `SUB_RESULTS`, `DELEGATION_REQUESTS`, `NEXT_RECOMMENDED: sub-delegate`.
+
+### Changed
+
+- **`forge-worker` frontmatter** — Claude adds `Agent`; Grok adds `task`, `get_task_output`, `kill_task`; OpenCode adds `task: allow`.
+- **README** — corrects outdated claim that Claude subagents cannot spawn subagents. Nested sub-agents are supported since Claude Code v2.1.172 (platform max 5 levels); Forge caps at depth 2 by cross-harness policy.
+- **`using-forge`**, **`forge`**, **`forge-grill`**, **`forge-adversary`** — document two-tier worker model and Codex `DELEGATION_REQUESTS` fan-out fallback.
+
+### Migration from 0.5.0
+
+- Run `npx @guidobuilds/forge-ai update` to install `forge-worker-leaf` and refresh coordinator artifacts. Requires Claude Code **v2.1.172+** for structural sub-delegation on Claude.
+
 ## [0.5.0] - 2026-06-20
 
 ### Added

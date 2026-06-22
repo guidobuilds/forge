@@ -318,7 +318,7 @@ test('install keeps non-interactive defaults when no flags are provided', async 
 test('install uses bundled Forge sources when --source is omitted', async () => {
   const output = await captureConsole(() => main(['install', '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
+  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/using-forge\/SKILL\.md/);
 });
@@ -495,16 +495,17 @@ test('manifest checksum reflects on-disk content, not pre-write content', async 
 
 test('discovers and dry-runs all bundled Forge artifacts', async () => {
   const root = process.cwd();
-  const expected = ['forge', 'forge-worker', 'using-forge', 'forge-grill', 'forge-adversary'];
+  const expected = ['forge', 'forge-worker', 'forge-worker-leaf', 'using-forge', 'forge-grill', 'forge-adversary'];
   const discovered = await discoverSources(root);
   assert.equal(discovered.diagnostics.filter((item) => item.severity === 'error').length, 0);
   assert.deepEqual(new Set(discovered.sources.map((source) => source.expectedName)), new Set(expected));
 
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
+  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-worker\.md/);
+  assert.match(output.stdout, /\.opencode\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-adversary\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/using-forge\/SKILL\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/forge-grill\/SKILL\.md/);
@@ -514,21 +515,40 @@ test('bundled forge artifact installs as a Claude skill, not a subagent', async 
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
+  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
   assert.match(output.stdout, /claude skill forge -> .*\.claude\/skills\/forge\/SKILL\.md/);
   assert.doesNotMatch(output.stdout, /\.claude\/agents\/forge\.md/);
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
+  assert.match(output.stdout, /claude agent forge-worker-leaf -> .*\.claude\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /claude agent forge-adversary -> .*\.claude\/agents\/forge-adversary\.md/);
+});
+
+test('bundled worker coordinator grants spawn tools; leaf denies them', async () => {
+  const root = process.cwd();
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  const coordinatorClaude = plan.files.find((f) => f.platform === 'claude' && f.name === 'forge-worker')?.content ?? '';
+  const leafClaude = plan.files.find((f) => f.platform === 'claude' && f.name === 'forge-worker-leaf')?.content ?? '';
+  const coordinatorGrok = plan.files.find((f) => f.platform === 'grok' && f.name === 'forge-worker')?.content ?? '';
+  const leafGrok = plan.files.find((f) => f.platform === 'grok' && f.name === 'forge-worker-leaf')?.content ?? '';
+  const coordinatorOpenCode = plan.files.find((f) => f.platform === 'opencode' && f.name === 'forge-worker')?.content ?? '';
+  const leafOpenCode = plan.files.find((f) => f.platform === 'opencode' && f.name === 'forge-worker-leaf')?.content ?? '';
+  assert.match(coordinatorClaude, /tools:.*Agent/);
+  assert.doesNotMatch(leafClaude, /tools:.*Agent/);
+  assert.match(coordinatorGrok, /- task\n/);
+  assert.doesNotMatch(leafGrok, /- task\n/);
+  assert.match(coordinatorOpenCode, /task: allow/);
+  assert.match(leafOpenCode, /task: deny/);
 });
 
 test('bundled forge artifact installs as a Grok skill, with worker and adversary as subagents', async () => {
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'grok', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 5 source\(s\), 5 output\(s\)/);
+  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
   assert.match(output.stdout, /grok skill forge -> .*\.grok\/skills\/forge\/SKILL\.md/);
   assert.doesNotMatch(output.stdout, /\.grok\/agents\/forge\.md/);
   assert.match(output.stdout, /grok agent forge-worker -> .*\.grok\/agents\/forge-worker\.md/);
+  assert.match(output.stdout, /grok agent forge-worker-leaf -> .*\.grok\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /grok agent forge-adversary -> .*\.grok\/agents\/forge-adversary\.md/);
   assert.match(output.stdout, /grok skill forge-grill -> .*\.grok\/skills\/forge-grill\/SKILL\.md/);
   assert.match(output.stdout, /grok skill using-forge -> .*\.grok\/skills\/using-forge\/SKILL\.md/);

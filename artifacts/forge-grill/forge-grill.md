@@ -42,6 +42,8 @@ Use `forge-worker` for:
 - implementation-plan consistency checks
 - technical risk investigation
 
+Grill inspect workers may return `DELEGATION_REQUESTS`; fan out `forge-worker-leaf` the same way as the main orchestrator.
+
 Keep each worker prompt bounded and explicit about:
 
 - the plan/design branch being tested

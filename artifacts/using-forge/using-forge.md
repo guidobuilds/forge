@@ -71,6 +71,33 @@ Avoid parallel dispatch when:
 - decisions are tightly coupled and need one evolving source of truth
 - merge or reconciliation cost outweighs the speed benefit
 
+## Worker sub-delegation
+
+Forge uses **two levels below the orchestrator** (`DISPATCH_DEPTH` 0 → 1 → 2) across harnesses:
+
+| Depth | Role | Artifact | Spawns |
+|-------|------|----------|--------|
+| 0 | orchestrator | `forge` | `forge-worker` |
+| 1 | coordinator | `forge-worker` | `forge-worker-leaf` |
+| 2 | terminal | `forge-worker-leaf` | nothing |
+
+### Coordinator triggers
+
+`forge-worker` **must** spawn leaves (or return `DELEGATION_REQUESTS` on Codex) when any: ≥ 8 file reads, ≥ 6 searches, ≥ 20 tool calls, ≥ 5 files to edit, `DELEGATION: required`, or plan implies ≥ 3 shards. **Never** sub-delegate `verify` or adversary work.
+
+### Orchestrator dispatch hints
+
+```text
+DISPATCH_DEPTH: 0
+DELEGATION: allowed|required|forbidden
+EFFORT: low|medium|high
+TASK_ID: <unique>
+```
+
+- Unfamiliar-repo `inspect` → `DELEGATION: allowed`
+- Narrow bugfix → `DELEGATION: forbidden`
+- Codex: parse `DELEGATION_REQUESTS` and fan out `forge-worker-leaf` yourself
+
 ## Routing rules
 
 - Never do worker work inline.
@@ -83,7 +110,7 @@ Avoid parallel dispatch when:
 - If a worker returns `blocked`, decide whether to ask the user, refine the subgoal, or launch another worker run for more inspection.
 - Size the state model to the work (see State model): skip it for trivial changes; add it for non-trivial or multi-session work.
 - For non-trivial work, do not accept a builder's self-certified `passing`; dispatch a separate verify run to confirm it (`forge-adversary` for risk-bearing work, else a `forge-worker` verify run).
-- Delegate by size: handle inline only a 1-3 file read, a mechanical known write, or a git status check; delegate to `forge-worker` when the work needs 4+ files read, multi-file analysis or writes, or running tests/builds/installs. The orchestrator thread stays thin because it accumulates summaries, not implementations.
+- Delegate by size: handle inline only a 1-3 file read, a mechanical known write, or a git status check; delegate to `forge-worker` when the work needs 4+ files read, multi-file analysis or writes, or running tests/builds/installs. Inside a coordinator run, ≥ 8 reads or the sub-delegation triggers above → `forge-worker-leaf`. The orchestrator thread stays thin because it accumulates summaries, not implementations.
 - Assign an effort level per dispatch (see Effort routing).
 - When `.forge/repo-facts.md` or `.forge/lessons.md` exist, have the worker read them so it reuses known facts and avoids repeating past mistakes.
 
@@ -173,15 +200,21 @@ Every worker response must use the Forge worker contract exactly:
 STATUS: success|partial|blocked
 WORK_TYPE: inspect|design|plan|build|operate|verify|mixed
 FEATURE_SLUG: <kebab-case>
+DISPATCH_DEPTH: 0|1|2
+WORKER_ROLE: coordinator|leaf
 ARTIFACTS:
 - <path or None>
 SUMMARY:
 - <point>
-NEXT_RECOMMENDED: inspect|design|plan|build|operate|verify|ask-user|none
+SUB_RESULTS:
+- task_id: <id> | status: success|partial|blocked | work_type: <type> | summary: <one line>
+DELEGATION_REQUESTS:
+- task_id: <id> | work_type: <type> | role: leaf | parallel: true|false | subgoal: <bounded> | files_hint: <paths or None>
+NEXT_RECOMMENDED: inspect|design|plan|build|operate|verify|sub-delegate|ask-user|none
 RISKS:
 - <risk or None>
 QUESTIONS:
 1) <question>
 ```
 
-Use `QUESTIONS` only when blocked.
+Use `QUESTIONS` only when blocked. `SUB_RESULTS` / `DELEGATION_REQUESTS` optional. Missing depth/role fields → treat as coordinator at depth 1 during transition.

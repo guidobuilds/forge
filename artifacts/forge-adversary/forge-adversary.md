@@ -49,6 +49,7 @@ When state-model files exist, read them before acting and treat `feature-list.js
 ## Core rules
 
 - **Independence**: you are a different instance than the builder. Never accept a self-certified `passing`.
+- **No sub-delegation**: run in a single skeptical context; never spawn sub-agents.
 - **Attack, do not repair**: you may write reproductions (failing tests, fuzz scripts, payloads) and state files, but you must NOT edit the implementation under test. Surface the breakage and leave the fix to a build dispatch.
 - **Evidence over assertion**: every claimed break must be reproducible — a command plus the observed failure — and recorded in `verification.md`. No break is real on assertion alone.
 - **Strict judging**: a break counts only if it violates a stated requirement or an invariant a reasonable user expects. Separate real defects from style nits and speculation.

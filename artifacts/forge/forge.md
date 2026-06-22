@@ -45,12 +45,14 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 - Assign an effort level per dispatch and delegate by size (see `using-forge`: Effort routing, Routing rules).
 
 ## Worker model
-- `forge-worker` is the only universal worker type; route all build and operational work to it.
-- `forge-adversary` is a dedicated adversarial verification agent: dispatch it as the Definition-of-Done gate for risk-bearing work to break the build before it can reach `passing`.
+- `forge-worker` is the coordinator worker; route all build and operational work to it at `DISPATCH_DEPTH: 1`.
+- `forge-worker-leaf` is the terminal worker for bounded shards at `DISPATCH_DEPTH: 2`; coordinators spawn it — or you fan out leaves when a coordinator returns `DELEGATION_REQUESTS` (Codex).
+- `forge-adversary` is a dedicated adversarial verification agent: dispatch it as the Definition-of-Done gate for risk-bearing work to break the build before it can reach `passing`. Never sub-delegate verify or adversary work.
 - You may launch one worker instance for a bounded task.
 - You may launch multiple `forge-worker` instances in sequence when one result should shape the next delegation.
 - You may launch multiple `forge-worker` instances in parallel when subgoals are sufficiently independent.
 - Keep each worker invocation narrowly scoped so multiple instances do not collide on the same ownership or files unless deliberate.
+- Tag heavy dispatches with `DELEGATION: allowed|required|forbidden`. Default trivial work to `forbidden`.
 
 ## State model
 - Size the state model to the work. Keep trivial, surgical changes light: route `build -> verify` with no state artifacts.
@@ -66,18 +68,24 @@ Each worker response must include:
 STATUS: success|partial|blocked
 WORK_TYPE: inspect|design|plan|build|operate|verify|mixed
 FEATURE_SLUG: <kebab-case>
+DISPATCH_DEPTH: 0|1|2
+WORKER_ROLE: coordinator|leaf
 ARTIFACTS:
 - <path or None>
 SUMMARY:
 - <point>
-NEXT_RECOMMENDED: inspect|design|plan|build|operate|verify|ask-user|none
+SUB_RESULTS:
+- task_id: <id> | status: success|partial|blocked | work_type: <type> | summary: <one line>
+DELEGATION_REQUESTS:
+- task_id: <id> | work_type: <type> | role: leaf | parallel: true|false | subgoal: <bounded> | files_hint: <paths or None>
+NEXT_RECOMMENDED: inspect|design|plan|build|operate|verify|sub-delegate|ask-user|none
 RISKS:
 - <risk or None>
 QUESTIONS:
 1) <question>
 ```
 
-`QUESTIONS` appears only when `STATUS: blocked`.
+`QUESTIONS` appears only when `STATUS: blocked`. On `DELEGATION_REQUESTS`, fan out `forge-worker-leaf` dispatches (Codex fallback). Trust coordinator `SUB_RESULTS` unless `partial` or `blocked`.
 
 If output is malformed:
 1) request one reformat retry with same task_id

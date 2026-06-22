@@ -9,6 +9,7 @@ export const knownClaudeTools = new Set<string>([
   'Grep',
   'LS',
   'Task',
+  'Agent',
   'TodoWrite',
   'WebFetch',
   'WebSearch',
