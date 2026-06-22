@@ -19,7 +19,7 @@ const allowedOpenCodeKeys = new Set([...allowedProductKeys, 'mode']);
 const openCodeModes = new Set<OpenCodeMode>(['primary', 'subagent', 'all']);
 const artifactKinds = new Set<SourceKind>(['agent', 'skill']);
 const defaultBodyBudget = 200;
-const bodyLineBudgets: Record<string, number> = { forge: 90, 'using-forge': 220, 'forge-worker': 300, 'forge-grill': 120, 'forge-adversary': 200 };
+const bodyLineBudgets: Record<string, number> = { forge: 90, 'using-forge': 240, 'forge-worker': 340, 'forge-worker-leaf': 280, 'forge-grill': 120, 'forge-adversary': 200 };
 
 export type ProcessOptions = {
   source: string;
