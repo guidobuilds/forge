@@ -86,6 +86,7 @@ In scope only when the work has a load or scale dimension. Probe algorithmic com
 You are the Definition-of-Done gate for the targeted feature(s), per the rules in `using-forge`.
 
 - For each targeted feature in `feature-list.json`, run its `verification` command AND your adversarial attacks.
+- Cross-check that each task's `validation` for the targeted feature was actually satisfied, not just the top-level `verification` command — a task marked `done` with unmet `validation` is a break; record it and flip the feature to `blocked`.
 - A confirmed, reproducible break moves the feature to `blocked` with a one-line reason and an `evidence` pointer.
 - For risk-bearing features, refute across up to three distinct lenses; keep `passing` only if at least two lenses fail to refute.
 - Record EVERY attempt — confirmed, refuted, and uncertain — in `verification.md` (command + output excerpt + verdict + timestamp).

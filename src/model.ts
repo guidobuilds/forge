@@ -17,13 +17,18 @@ export type OpenCodeConfig = ProductConfig & {
   mode?: OpenCodeMode;
 };
 
+export type ClaudeConfig = ProductConfig & {
+  when_to_use?: string;
+  'user-invocable'?: boolean;
+};
+
 export type CanonicalArtifact = {
   name: string;
   description: string;
   kind: SourceKind;
   body: string;
   sourcePath: string;
-  claude?: ProductConfig;
+  claude?: ClaudeConfig;
   opencode?: OpenCodeConfig;
   codex?: ProductConfig;
   grok?: ProductConfig;

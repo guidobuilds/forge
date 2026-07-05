@@ -31,6 +31,14 @@ export function renderClaudeAgent(artifact: CanonicalArtifact): { content: strin
 export function renderClaudeSkill(artifact: CanonicalArtifact): { content: string; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   const fm: Record<string, unknown> = { name: artifact.name, description: artifact.description };
+  if (artifact.claude?.when_to_use) fm.when_to_use = artifact.claude.when_to_use;
+  if (artifact.claude?.model) {
+    fm.model = artifact.claude.model;
+    if (!isKnownClaudeModel(artifact.claude.model)) {
+      diagnostics.push(diagnostic('warning', 'CLAUDE_UNKNOWN_MODEL', `Unknown Claude model "${artifact.claude.model}" for ${artifact.name}`, { platform: 'claude' }));
+    }
+  }
+  if (artifact.claude?.['user-invocable'] !== undefined) fm['user-invocable'] = artifact.claude['user-invocable'];
   const permissions = artifact.claude?.permissions;
   const allowedTools = isRecord(permissions) ? patternList(permissions['allowed-tools']) : undefined;
   if (allowedTools) {
@@ -39,6 +47,5 @@ export function renderClaudeSkill(artifact: CanonicalArtifact): { content: strin
   } else if (permissions !== undefined) {
     diagnostics.push(diagnostic('info', 'CLAUDE_SKILL_PERMISSIONS_IGNORED', `Claude skill permissions are not emitted for ${artifact.name}`, { platform: 'claude' }));
   }
-  if (artifact.claude?.model) diagnostics.push(diagnostic('info', 'CLAUDE_SKILL_MODEL_IGNORED', `Claude skill model is not emitted for ${artifact.name}`, { platform: 'claude' }));
   return { content: `${stringifyYaml(fm)}${artifact.body}\n`, diagnostics };
 }

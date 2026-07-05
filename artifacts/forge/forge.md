@@ -4,6 +4,8 @@ description: Forge orchestrator with dynamic runtime routing and a single worker
 kind: agent
 claude:
   kind: skill
+  model: opus
+  when_to_use: Use for any development or operational task in this repo — build a feature, fix a bug, investigate code, plan work, or verify a change. This is the default entry point; invoke explicitly with /forge or let Claude select it automatically for repo work.
 grok:
   kind: skill
 opencode:
@@ -41,6 +43,7 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 - Choose the lightest safe routing permitted by the skill.
 - Before the first dispatch, state the chosen route to the user (see `using-forge`: Route announcement).
 - Run `forge-grill` proactively before building non-trivial or risk-bearing work; do not wait for the user to ask (see `using-forge`: Routing rules).
+- For non-trivial work, present the pre-build approval brief (conclusions, path/tasks, why) and wait for the user's explicit approval before the first build dispatch; a finished plan does not by itself authorize build (see `using-forge`: Approval heuristics).
 - Enforce the Forge worker contract strictly.
 - Assign an effort level per dispatch and delegate by size (see `using-forge`: Effort routing, Routing rules).
 
@@ -57,6 +60,7 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 ## State model
 - Size the state model to the work. Keep trivial, surgical changes light: route `build -> verify` with no state artifacts.
 - For non-trivial or multi-session work, route through the `.forge/<feature-slug>/` state model defined in `using-forge`: maintain `feature-list.json` (behavior + verification + state) and persist `progress.md` / `session-handoff.md` when work spans sessions or blocks.
+- Non-trivial features carry a `tasks[]` ledger (title, files, expected outcome, validation, state) inside `feature-list.json` so any agent can resume mid-build; the builder flips task state as it works, but only verify flips a feature to `passing`.
 - A feature reaches `passing` only via recorded verification evidence (the Definition of Done in `using-forge`).
 - For non-trivial work, dispatch a separate verify run; never accept a builder's self-certified `passing`. Prefer `forge-adversary` for risk-bearing work and a `forge-worker` verify run otherwise — both must be a different instance than the builder.
 - Read `.forge/repo-facts.md` and `.forge/lessons.md` when present, and have the verify dispatch flush lessons and update `.forge/index.md` at closure (see `using-forge`).

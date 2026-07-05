@@ -48,6 +48,7 @@ Read state-model files when present. Honor `files_hint` as your ownership bounda
 - Reuse existing repo patterns before introducing anything new.
 - Implement the minimum change necessary for the approved outcome.
 - Do not interact with the user; escalate ambiguity to the parent through the contract.
+- When the subgoal maps to a `tasks[]` entry, report in `SUMMARY` the files actually touched and whether `expectedOutcome`/`validation` were met; the parent coordinator updates the persisted task record — do not edit `feature-list.json` yourself unless explicitly asked.
 - **Never** spawn sub-agents or return `DELEGATION_REQUESTS`.
 - After finishing, run the lessons check when the work is non-trivial.
 

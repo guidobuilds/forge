@@ -73,6 +73,8 @@ Before editing files or mutating state, confirm:
 - the validation that should prove the goal
 - whether approval exists for any state-changing action in scope
 
+When `feature-list.json` has a `tasks[]` entry for this subgoal, these are exactly its fields — update that entry's `state` and `files` as you progress instead of re-deriving them from scratch.
+
 ## Internal work types
 
 Choose the narrowest accurate `WORK_TYPE` for the work actually performed:
@@ -106,6 +108,7 @@ Choose the narrowest accurate `WORK_TYPE` for the work actually performed:
 - Make each planned task buildable and testable without guesswork.
 - Do not pad the plan with placeholders such as `TBD`, `TODO`, or catch-all steps.
 - A plan may prepare work, but it does not by itself authorize implementation.
+- Populate `tasks[]` inside each in-scope feature in `feature-list.json`: `id`, `title`, `workType`, `files`, `expectedOutcome`, `validation`, `state`. This is the approvable path the orchestrator presents in the pre-build approval brief — make it concrete enough that another agent could resume from it with no other context.
 - Write `.forge/<feature-slug>/plan.md` only when a durable execution plan will reduce risk or coordination cost.
 
 ### Build mode
@@ -115,6 +118,7 @@ Choose the narrowest accurate `WORK_TYPE` for the work actually performed:
 - If approval for a state-changing action is absent or materially ambiguous, stop and return `STATUS: blocked` instead of guessing.
 - Record `.forge/<feature-slug>/build-log.md` when the implementation should leave a durable execution record.
 - When `feature-list.json` exists, move the feature(s) you are building from `not_started -> active` at the start, and update `progress.md` if it exists.
+- Flip each task's `state` (`not_started -> active -> done`) as you work it, and correct `files` if the actual surfaces touched differ from the plan. Task `done` tracks execution progress only.
 - Do not set a feature to `passing` on non-trivial work. Recommend `verify` in `NEXT_RECOMMENDED`; an independent verify dispatch records evidence and flips the state.
 - Never make a check pass by weakening, deleting, or skipping it, or by adding error-swallowing; fix the cause. State each feature's `behavior` as the observable outcome(s) it must satisfy, not "tests pass".
 
@@ -198,13 +202,27 @@ If no durable artifact is warranted for the assigned subgoal, return `ARTIFACTS:
       "state": "not_started",
       "evidence": null,
       "archiveWhen": "falsifiable condition under which this feature is done and can be archived",
-      "dependencies": []
+      "dependencies": [],
+      "tasks": [
+        {
+          "id": "f1-t1",
+          "title": "What this task does, in one line.",
+          "workType": "design|plan|build|verify|operate",
+          "files": ["path/a", "path/b"],
+          "expectedOutcome": "What is true when this task is done.",
+          "validation": "command or check that proves it",
+          "state": "not_started",
+          "notes": null
+        }
+      ]
     }
   ]
 }
 ```
 
 Rules: `behavior` and `verification` are required; `verification` is a single runnable command with no `TBD`/`TODO`; `state` is `not_started | active | blocked | passing`; `evidence` stays `null` until `passing`, then points at a `verification.md` entry (e.g. `"verification.md#f1"`); `archiveWhen` is a falsifiable done/archivable condition set at feature creation.
+
+`tasks[]` is the feature's resumable execution ledger — populated during `plan` (or `design` for small features) and exactly the path presented in the pre-build approval brief. Task `state` is `not_started | active | blocked | done`; `done` records execution progress only and never substitutes for the feature's `verification` evidence. `files` are the surfaces the task expects to touch — correct it if actuals differ. `notes` carries a blocked reason or free-form context, `null` otherwise.
 
 Markdown templates (keep entries terse):
 
@@ -221,6 +239,7 @@ Markdown templates (keep entries terse):
 ## <ISO> — <work_type>
 - Changed: <files/surfaces>   Result: <what is now true>
 - Feature states: f1 passing, f2 active, f3 blocked (<reason>)
+- Active task: <feature-id>/<task-id> — <task title> (<task state>)
 - Next: <single most useful next step>
 ```
 
@@ -228,8 +247,9 @@ Markdown templates (keep entries terse):
 # Session Handoff — <slug>
 ## Current state
 - Goal: <goal> | Done: <passing> | In flight: <active + where> | Blocked: <blocked + exact unblocker>
+- Active task: <feature-id>/<task-id> — <title> | Files touched so far: <files>
 ## To resume
-1. <first concrete action>   2. <verification command to re-establish ground truth>
+1. <first concrete action, tied to the active task>   2. <verification command to re-establish ground truth>
 ## Open decisions / risks
 - <decision owed to the user, or risk>
 ```

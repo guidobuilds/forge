@@ -9,18 +9,26 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-06-22
+## [0.6.0] - 2026-07-05
 
 ### Added
 
 - **`forge-worker-leaf` agent** — terminal worker for bounded subgoal shards at `DISPATCH_DEPTH: 2`. No spawn tools (`task: deny` on OpenCode; no `Agent`/`task` on Claude/Grok). Installed alongside `forge-worker` on all platforms.
 - **Worker sub-delegation** — `forge-worker` is now a coordinator that spawns `forge-worker-leaf` when context triggers fire (≥ 8 file reads, ≥ 6 searches, ≥ 20 tool calls, ≥ 5 files to build, or `DELEGATION: required`). Extended worker contract: `DISPATCH_DEPTH`, `WORKER_ROLE`, `SUB_RESULTS`, `DELEGATION_REQUESTS`, `NEXT_RECOMMENDED: sub-delegate`.
+- **Pre-build approval gate** — for non-trivial work, the orchestrator presents an approval brief (conclusions, path/tasks, why) after inspect/design/plan (and `forge-grill` if it ran) and waits for the user's explicit approval before the first build dispatch. Trivial, explicit, low-risk requests remain self-approving — no artificial gate is created.
+- **Per-feature `tasks[]` ledger** — each feature in `feature-list.json` can carry a `tasks[]` array (`id`, `title`, `workType`, `files`, `expectedOutcome`, `validation`, `state`) so any agent can resume mid-build knowing what a task was, what it touches, what "done" looks like, and how to validate it. `forge-worker` owns the schema.
+- **Claude Code skill frontmatter** — canonical artifacts can now set `claude.when_to_use`, `claude.model`, and `claude.user-invocable` (Claude Code now supports `model` on skills, not just agents). Applied to the three artifacts that render as Claude Code skills: `forge` and `forge-grill` runs on `opus`, `forge` is the only one left user-invocable; `using-forge` run on `sonnet` and are set (along with `forge-grill`) `user-invocable: false` (Claude still loads them automatically; they no longer appear in the `/` menu or run as standalone commands).
 
 ### Changed
 
 - **`forge-worker` frontmatter** — Claude adds `Agent`; Grok adds `task`, `get_task_output`, `kill_task`; OpenCode adds `task: allow`.
 - **README** — corrects outdated claim that Claude subagents cannot spawn subagents. Nested sub-agents are supported since Claude Code v2.1.172 (platform max 5 levels); Forge caps at depth 2 by cross-harness policy.
 - **`using-forge`**, **`forge`**, **`forge-grill`**, **`forge-adversary`** — document two-tier worker model and Codex `DELEGATION_REQUESTS` fan-out fallback.
+- **Route announcement** — for non-trivial work, the announcement is now followed by the pre-build approval brief; re-announcing mid-flight also re-triggers approval.
+- **`forge-worker` plan/build modes** — plan populates `tasks[]`; build flips task `state` (`not_started -> active -> done`) as it works. Task `done` is distinct from feature `state`, which only a verify dispatch can move to `passing`.
+- **`forge-adversary`** — cross-checks that each task's `validation` was actually satisfied, not just the feature's top-level `verification` command.
+- **`progress.md` / `session-handoff.md` templates** — now reference the active `<feature-id>/<task-id>` so a resuming agent finds its place immediately.
+- **`renderClaudeSkill`** — no longer drops the `model` field for Claude Code skills; it now validates it against known Claude models the same way `renderClaudeAgent` does.
 
 ### Migration from 0.5.0
 

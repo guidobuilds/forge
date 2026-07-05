@@ -2,6 +2,10 @@
 name: forge-grill
 description: Stress-test a plan or design through Forge orchestration, batching user questions while delegating codebase-answerable work to forge-worker.
 kind: skill
+claude:
+  model: sonnet
+  when_to_use: Invoked by the forge orchestrator itself before non-trivial or risk-bearing build work, not directly by the user — surfaces unresolved assumptions, edge cases, and risks in a plan before implementation starts.
+  user-invocable: false
 ---
 
 # Forge Grill Skill
@@ -92,5 +96,5 @@ If a worker response is malformed, request one reformat retry for the same task.
 - Be direct and rigorous, but not performative.
 - Explain why each question matters.
 - Include recommendations in actionable language, such as "Recommended: choose A because...".
-- Make unresolved risk visible before moving to build, plan, or approval-seeking work.
+- Make unresolved risk visible before moving to build, plan, or the pre-build approval brief (see `using-forge`: Approval heuristics) — grill findings and the plan's `tasks[]` are exactly what that brief presents.
 - If grilling reveals implementation work is needed, route it through the normal Forge worker model instead of doing it inline.

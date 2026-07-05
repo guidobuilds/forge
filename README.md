@@ -49,7 +49,7 @@ build -> verify
 
 There is no mandatory lifecycle. Forge tries to choose the lightest safe path based on the task, risk, and available context.
 
-Before delegating, the orchestrator states the chosen route to the user — the work types it plans to run, whether `forge-grill` runs before build, and why it is the lightest safe path for that request.
+Before delegating, the orchestrator states the chosen route to the user — the work types it plans to run, whether `forge-grill` runs before build, and why it is the lightest safe path for that request. For non-trivial work, it then presents an approval brief — conclusions, planned tasks, why — and waits for an explicit go-ahead before the first build dispatch.
 
 ## Durable Context
 
@@ -68,9 +68,11 @@ Small, obvious changes do not need ceremony. The goal is to use durable artifact
 
 For non-trivial or multi-session work, Forge keeps a small state model under `.forge/<feature-slug>/`, sized to the task:
 
-- `feature-list.json` — the unit-of-work ledger. Each feature carries the triple `behavior` + `verification` (a runnable command) + `state` (`not_started | active | blocked | passing`).
+- `feature-list.json` — the unit-of-work ledger. Each feature carries the triple `behavior` + `verification` (a runnable command) + `state` (`not_started | active | blocked | passing`), plus a `tasks[]` execution ledger (title, files, expected outcome, validation, state) so any agent can resume mid-build.
 - `verification.md` — recorded verification evidence: the command, its output, and a pass/fail verdict.
 - `progress.md` / `session-handoff.md` — session continuity and handoff, written when work spans sessions or blocks.
+
+Before build starts on non-trivial work, Forge presents an approval brief — conclusions, the planned tasks, and why — and waits for an explicit go-ahead; a finished plan does not authorize build by itself.
 
 Two rules make "done" mean done:
 
@@ -145,14 +147,14 @@ What changes per platform is the **kind** each piece is installed as, and theref
 
 | Piece | Installed as | How you invoke it |
 |---|---|---|
-| `forge` | skill | type `/forge` in the prompt |
-| `forge-grill` | skill | type `/forge-grill` |
-| `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
+| `forge` | skill (`model: opus`) | type `/forge` in the prompt — the only Forge skill you invoke directly |
+| `forge-grill` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before non-trivial or risk-bearing builds |
+| `using-forge` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before routing work |
 | `forge-worker` | subagent | coordinator; main thread delegates via `Agent` (or legacy `Task`) |
 | `forge-worker-leaf` | subagent | terminal shard; spawned by `forge-worker` (or orchestrator on Codex) |
 | `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
 
-Start a session by typing **`/forge`**. That loads the orchestrator role into your main Claude Code thread, which delegates each bounded task to `forge-worker`, which may spawn `forge-worker-leaf` for heavy inspect/build shards. Requires **Claude Code v2.1.172+** for nested sub-agents.
+Start a session by typing **`/forge`**. That loads the orchestrator role into your main Claude Code thread, which delegates each bounded task to `forge-worker`, which may spawn `forge-worker-leaf` for heavy inspect/build shards. Requires **Claude Code v2.1.172+** for nested sub-agents. `forge-grill` and `using-forge` are marked `user-invocable: false`: Claude still loads and runs them as part of `forge`'s routing, but they no longer appear in the `/` menu or run as standalone commands — `forge` is the single entry point.
 
 > Why a skill and not an agent on Claude? The main thread retains `Agent`/`Task` and can delegate. A skill injects orchestrator behavior without replacing the main agent. The trade-off: "delegate, never do worker work inline" is followed by instruction at the orchestrator layer, not by tool restrictions — but `forge-worker` **can** structurally spawn leaves when given `Agent` in its tool list.
 

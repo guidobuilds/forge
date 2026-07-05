@@ -16,6 +16,7 @@ const platformKeys = new Set(['claude', 'opencode', 'codex', 'grok']);
 const allowedTopLevel = new Set(['name', 'description', 'kind', 'claude', 'opencode', 'codex', 'grok']);
 const allowedProductKeys = new Set(['permissions', 'model', 'kind']);
 const allowedOpenCodeKeys = new Set([...allowedProductKeys, 'mode']);
+const allowedClaudeKeys = new Set([...allowedProductKeys, 'when_to_use', 'user-invocable']);
 const openCodeModes = new Set<OpenCodeMode>(['primary', 'subagent', 'all']);
 const artifactKinds = new Set<SourceKind>(['agent', 'skill']);
 const defaultBodyBudget = 200;
@@ -95,7 +96,7 @@ function convertSource(source: SourceItem, sourceRoot: string): { item?: Canonic
     }
     const record = config as Record<string, unknown>;
     for (const key of Object.keys(record)) {
-      const allowedKeys = platform === 'opencode' ? allowedOpenCodeKeys : allowedProductKeys;
+      const allowedKeys = platform === 'opencode' ? allowedOpenCodeKeys : platform === 'claude' ? allowedClaudeKeys : allowedProductKeys;
       if (!allowedKeys.has(key)) diagnostics.push(diagnostic('error', 'UNSUPPORTED_PLATFORM_FIELD', `${platform}.${key} is not supported in the MVP`, { sourcePath: source.sourcePath, platform: platform as Platform }));
     }
     if ('model' in record && typeof record.model !== 'string') {
@@ -103,6 +104,12 @@ function convertSource(source: SourceItem, sourceRoot: string): { item?: Canonic
     }
     if ('kind' in record && !artifactKinds.has(record.kind as SourceKind)) {
       diagnostics.push(diagnostic('error', 'INVALID_PLATFORM_KIND', `${platform}.kind must be one of agent, skill`, { sourcePath: source.sourcePath, platform: platform as Platform }));
+    }
+    if (platform === 'claude' && 'when_to_use' in record && typeof record.when_to_use !== 'string') {
+      diagnostics.push(diagnostic('error', 'INVALID_CLAUDE_WHEN_TO_USE', 'claude.when_to_use must be a string', { sourcePath: source.sourcePath, platform: 'claude' }));
+    }
+    if (platform === 'claude' && 'user-invocable' in record && typeof record['user-invocable'] !== 'boolean') {
+      diagnostics.push(diagnostic('error', 'INVALID_CLAUDE_USER_INVOCABLE', 'claude.user-invocable must be a boolean', { sourcePath: source.sourcePath, platform: 'claude' }));
     }
     if (platform === 'opencode' && 'mode' in record) {
       if (!openCodeModes.has(record.mode as OpenCodeMode)) {
@@ -142,7 +149,9 @@ function convertSource(source: SourceItem, sourceRoot: string): { item?: Canonic
 }
 
 function productConfig(value: unknown) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as { permissions?: unknown; model?: string; kind?: SourceKind; mode?: OpenCodeMode } : undefined;
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as { permissions?: unknown; model?: string; kind?: SourceKind; mode?: OpenCodeMode; when_to_use?: string; 'user-invocable'?: boolean }
+    : undefined;
 }
 
 function renderFile(platform: Platform, kind: SourceKind, artifact: CanonicalArtifact, options: ProcessOptions, diagnostics: Diagnostic[]): OutputFile {

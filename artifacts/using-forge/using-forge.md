@@ -2,6 +2,10 @@
 name: using-forge
 description: Route work through the lightest safe Forge workflow using dynamic runtime routing.
 kind: skill
+claude:
+  model: sonnet
+  when_to_use: Background operating model for the forge orchestrator — routing rules, state model, and approval heuristics. Loaded automatically before dispatching work; not meant to be invoked directly.
+  user-invocable: false
 ---
 
 # Using Forge Skill
@@ -48,7 +52,7 @@ Use artifacts in `.forge/<feature-slug>/` when they improve clarity, reuse, or a
 
 ## Route announcement
 
-Before the first dispatch, state the chosen route to the user: work types joined by arrows (e.g. `build -> verify`, `inspect -> build -> verify`, `inspect -> design -> plan -> build -> verify`), whether a `forge-grill` pass runs before build and an independent verify or `forge-adversary` gate runs after, and one clause on why it is the lightest safe route. Re-announce only when the route changes materially mid-flight.
+Before the first dispatch, state the chosen route to the user: work types joined by arrows (e.g. `build -> verify`, `inspect -> build -> verify`, `inspect -> design -> plan -> build -> verify`), whether a `forge-grill` pass runs before build and an independent verify or `forge-adversary` gate runs after, and one clause on why it is the lightest safe route. For non-trivial work, follow the announcement with the pre-build approval brief (see Approval heuristics) and wait for the user's explicit approval before the first build dispatch. Re-announce and re-seek approval only when the route changes materially mid-flight.
 
 ## Dispatch strategies
 
@@ -125,6 +129,17 @@ Approvals depend on the action being authorized and the risk of that action, not
 - If the requested action is already explicit and low-risk, do not create artificial gates.
 - If a materially important decision is unresolved, use the worker contract to escalate it and keep the user thread in the orchestrator.
 
+### Pre-build approval gate
+
+For non-trivial work, present an approval brief before the first build dispatch and wait for an explicit reply — never infer approval from silence or from a finished plan alone:
+
+- **Conclusions**: the key findings from inspect/design/grill.
+- **Path**: the tasks about to run (the feature's `tasks[]`, see State model) — title, files, validation.
+- **Why**: one or two clauses on why this is the lightest safe route.
+- **Open risks**, if any.
+
+Skip the brief only when the request is already explicit, trivial, and low-risk — the request itself is the approval. Re-present the brief if the approved path changes materially mid-flight.
+
 ## Effort routing
 
 Match model effort to the work, not the reverse — higher effort spends more reasoning and tool calls, not more speed, so over-spending wastes tokens and time for the same result. State an effort level in each dispatch:
@@ -146,7 +161,7 @@ Preferred process artifacts (write when they help future runs or clarify approva
 
 State-model artifacts (the source of truth for non-trivial or multi-session work, see State model):
 
-- `.forge/<feature-slug>/feature-list.json` — unit-of-work ledger: `behavior` + `verification` + `state`
+- `.forge/<feature-slug>/feature-list.json` — unit-of-work ledger: `behavior` + `verification` + `state`, each feature carrying a resumable `tasks[]` execution ledger
 - `.forge/<feature-slug>/verification.md` — recorded verification evidence (the Definition of Done store)
 - `.forge/<feature-slug>/progress.md` — session continuity log
 - `.forge/<feature-slug>/session-handoff.md` — cross-session / blocked handoff
@@ -169,6 +184,7 @@ Size the state model to the work so the lightest safe workflow stays the default
 
 Triggers:
 - Create `feature-list.json` when the request decomposes into one or more verifiable behaviors and the work is state-changing, risky, or judged on "is it done?".
+- Populate each feature's `tasks[]` during plan (or design, for small features) — the same list the pre-build approval brief presents; `forge-worker` owns the schema.
 - Create `progress.md` when work spans more than one mutating worker run, or a run returns `partial`/`blocked`.
 - Create `session-handoff.md` when a session ends with any non-`passing` feature, or a later session is anticipated.
 - Bootstrap `.forge/repo-facts.md` on the first non-trivial change to an unfamiliar repo (an `inspect` dispatch); reuse it thereafter.
@@ -187,6 +203,8 @@ A feature's `state` may become `passing` only when ALL hold:
 2. the result is recorded in `.forge/<feature-slug>/verification.md` (command + output excerpt + pass verdict + timestamp),
 3. `evidence` in `feature-list.json` points to that entry,
 4. every `id` in its `dependencies` is already `passing`.
+
+A task's `state: done` records execution progress only and never substitutes for this evidence.
 
 No feature moves to `passing` on assertion alone, and never by weakening, deleting, skipping, or stubbing the check; the recorded output must actually exercise the named `behavior`. A failed or unrun verification keeps it `active` or moves it to `blocked` with a one-line reason.
 

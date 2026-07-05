@@ -117,11 +117,27 @@ test('claude skill emits allowed-tools as comma-separated string and warns', () 
   assert.ok(rendered.diagnostics.some((item) => item.code === 'CLAUDE_SKILL_ALLOWED_TOOLS' && item.severity === 'warning'));
 });
 
-test('claude skill drops model and emits ignored diagnostic', () => {
-  const withModel: CanonicalArtifact = { name: 's', description: 'd', kind: 'skill', body: 'i', sourcePath: 'artifacts/s/s.md', claude: { model: 'opus' } };
+test('claude skill emits model, when_to_use, and user-invocable', () => {
+  const withModel: CanonicalArtifact = {
+    name: 's',
+    description: 'd',
+    kind: 'skill',
+    body: 'i',
+    sourcePath: 'artifacts/s/s.md',
+    claude: { model: 'opus', when_to_use: 'Use when doing s things.', 'user-invocable': false }
+  };
   const rendered = renderClaudeSkill(withModel);
-  assert.doesNotMatch(rendered.content, /model:/);
-  assert.ok(rendered.diagnostics.some((item) => item.code === 'CLAUDE_SKILL_MODEL_IGNORED'));
+  assert.match(rendered.content, /model: opus\n/);
+  assert.match(rendered.content, /when_to_use: Use when doing s things\.\n/);
+  assert.match(rendered.content, /user-invocable: false\n/);
+  assert.equal(rendered.diagnostics.length, 0);
+});
+
+test('claude skill reports unknown model as a warning', () => {
+  const withModel: CanonicalArtifact = { name: 's', description: 'd', kind: 'skill', body: 'i', sourcePath: 'artifacts/s/s.md', claude: { model: 'sonet' } };
+  const rendered = renderClaudeSkill(withModel);
+  assert.match(rendered.content, /model: sonet/);
+  assert.ok(rendered.diagnostics.some((item) => item.code === 'CLAUDE_UNKNOWN_MODEL' && item.severity === 'warning'));
 });
 
 test('grok agent emits tools as a YAML sequence, not a comma-joined string', () => {
@@ -215,6 +231,15 @@ test('processor flags an artifact body over its line budget as info, not error',
   assert.ok(budgetInfo, 'expected BODY_OVER_BUDGET diagnostic');
   assert.equal(budgetInfo!.severity, 'info');
   assert.equal(plan.diagnostics.filter((item) => item.severity === 'error').length, 0);
+});
+
+test('processor validates claude.when_to_use and claude.user-invocable types and platform scope', async () => {
+  const root = await tempDir('forge-invalid-');
+  await writeArtifact(root, 'claude-only', 'name: claude-only\ndescription: Desc\nkind: skill\nclaude:\n  when_to_use: 123\n  user-invocable: not-a-bool\ngrok:\n  when_to_use: nope');
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  assert.ok(plan.diagnostics.some((item) => item.code === 'INVALID_CLAUDE_WHEN_TO_USE'));
+  assert.ok(plan.diagnostics.some((item) => item.code === 'INVALID_CLAUDE_USER_INVOCABLE'));
+  assert.ok(plan.diagnostics.some((item) => item.code === 'UNSUPPORTED_PLATFORM_FIELD' && item.platform === 'grok'));
 });
 
 test('per-platform kind override renders the alternate artifact kind', async () => {
