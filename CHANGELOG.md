@@ -9,6 +9,8 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-06
+
 ### Added
 
 - **Claude Code plugin distribution channel** — Forge can now be installed as a Claude Code plugin (`/plugin marketplace add guidobuilds/forge` then `/plugin install forge@guidobuilds`), generated from the same canonical `artifacts/` source as the CLI via the new `forge-ai build-plugin` command. Claude Code only — other platforms remain CLI-only (`npx @guidobuilds/forge-ai install`). Plugin skills are namespaced, so the orchestrator is invoked as `/forge:forge` instead of `/forge`.
