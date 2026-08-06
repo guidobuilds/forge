@@ -502,6 +502,104 @@ test('validate rejects install-only flags', async () => {
   assert.match(output.stderr, /validate only accepts --platform and --source/);
 });
 
+test('build-plugin writes plugin.json, skills/, and agents/ from the real bundled artifacts to --out', async () => {
+  const root = process.cwd();
+  const outDir = await tempDir('forge-plugin-');
+  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  assert.match(output.stdout, /Wrote 7 file\(s\)/);
+  const pluginJson = JSON.parse(await readFile(path.join(outDir, '.claude-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(pluginJson.name, 'forge');
+  await access(path.join(outDir, 'skills', 'forge', 'SKILL.md'));
+  await access(path.join(outDir, 'agents', 'forge-worker.md'));
+  await access(path.join(outDir, 'agents', 'forge-worker-leaf.md'));
+  await access(path.join(outDir, 'agents', 'forge-adversary.md'));
+  await access(path.join(outDir, 'skills', 'using-forge', 'SKILL.md'));
+  await access(path.join(outDir, 'skills', 'forge-grill', 'SKILL.md'));
+  await assert.rejects(access(path.join(outDir, 'agents', 'forge.md')));
+});
+
+test('build-plugin --dry-run reports the file list without writing anything to disk', async () => {
+  const root = process.cwd();
+  const outDir = await tempDir('forge-plugin-');
+  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir, '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  assert.match(output.stdout, /would be written/);
+  assert.match(output.stdout, /skills\/forge\/SKILL\.md/);
+  await assert.rejects(access(path.join(outDir, '.claude-plugin')));
+});
+
+test('build-plugin refuses a non-empty --out that is not a prior plugin build, without --force', async () => {
+  const root = process.cwd();
+  const outDir = await tempDir('forge-plugin-');
+  await writeFile(path.join(outDir, 'unrelated.txt'), 'not a plugin dir');
+  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /--force/);
+  await assert.rejects(access(path.join(outDir, '.claude-plugin')));
+});
+
+test('build-plugin succeeds with --force on a non-empty, non-plugin --out', async () => {
+  const root = process.cwd();
+  const outDir = await tempDir('forge-plugin-');
+  await writeFile(path.join(outDir, 'unrelated.txt'), 'not a plugin dir');
+  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir, '--force'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  await access(path.join(outDir, '.claude-plugin', 'plugin.json'));
+});
+
+test('build-plugin rejects --platform', async () => {
+  const output = await captureConsole(() => main(['build-plugin', '--platform', 'claude'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /build-plugin only accepts/);
+});
+
+test('build-plugin --target codex writes the standalone skills-only Codex plugin', async () => {
+  const outDir = await tempDir('forge-plugin-');
+  const output = await captureConsole(() => main(['build-plugin', '--target', 'codex', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  assert.match(output.stdout, /Wrote 7 file\(s\)/);
+  await access(path.join(outDir, '.codex-plugin', 'plugin.json'));
+  await access(path.join(outDir, 'skills', 'forge', 'references', 'worker-leaf.md'));
+  await assert.rejects(access(path.join(outDir, '.claude-plugin')));
+  await assert.rejects(access(path.join(outDir, 'agents')));
+});
+
+test('build-plugin target guard refuses overwriting a plugin built for the other platform', async () => {
+  const outDir = await tempDir('forge-plugin-');
+  assert.equal((await captureConsole(() => main(['build-plugin', '--target', 'codex', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }))).code, 0);
+  const output = await captureConsole(() => main(['build-plugin', '--target', 'claude', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /prior Forge claude plugin build/);
+});
+
+test('build-plugin target guard refuses a foreign same-target Codex manifest without --force', async () => {
+  const outDir = await tempDir('forge-plugin-');
+  await mkdir(path.join(outDir, '.codex-plugin'), { recursive: true });
+  await writeFile(path.join(outDir, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'unrelated-plugin', version: '1.0.0' }));
+  await writeFile(path.join(outDir, 'keep.txt'), 'foreign');
+  const output = await captureConsole(() => main(['build-plugin', '--target', 'codex', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /must identify plugin "forge"/);
+  assert.equal(JSON.parse(await readFile(path.join(outDir, '.codex-plugin', 'plugin.json'), 'utf8')).name, 'unrelated-plugin');
+});
+
+test('build-plugin target guard refuses a foreign same-target Claude manifest without --force', async () => {
+  const outDir = await tempDir('forge-plugin-');
+  await mkdir(path.join(outDir, '.claude-plugin'), { recursive: true });
+  await writeFile(path.join(outDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'unrelated-plugin', version: '1.0.0' }));
+  const output = await captureConsole(() => main(['build-plugin', '--target', 'claude', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /must identify plugin "forge"/);
+  assert.equal(JSON.parse(await readFile(path.join(outDir, '.claude-plugin', 'plugin.json'), 'utf8')).name, 'unrelated-plugin');
+});
+
+test('build-plugin rejects invalid --target', async () => {
+  const output = await captureConsole(() => main(['build-plugin', '--target', 'other'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /Invalid --target/);
+});
+
 test('npm bin shim runs the built CLI', async () => {
   const result = await execFile(process.execPath, [path.join(process.cwd(), 'bin', 'forge-ai.mjs'), '--help']);
   assert.match(result.stdout, /Usage: forge-ai install/);
@@ -546,6 +644,20 @@ test('bundled forge artifact installs as a Claude skill, not a subagent', async 
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
   assert.match(output.stdout, /claude agent forge-worker-leaf -> .*\.claude\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /claude agent forge-adversary -> .*\.claude\/agents\/forge-adversary\.md/);
+});
+
+test('bundled Forge direct Codex install includes all six canonical artifacts and diagnostics', async () => {
+  const root = process.cwd();
+  const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'codex', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
+  for (const name of ['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary']) {
+    assert.ok(output.stdout.includes(`codex agent ${name} -> ${path.join(root, '.codex', 'agents', `${name}.toml`)}`));
+  }
+  for (const name of ['using-forge', 'forge-grill']) {
+    assert.ok(output.stdout.includes(`codex skill ${name} -> ${path.join(root, '.agents', 'skills', name, 'SKILL.md')}`));
+  }
+  assert.match(output.stdout, /CODEX_PARTIAL_AGENT_SUPPORT/);
 });
 
 test('bundled worker coordinator grants spawn tools; leaf denies them', async () => {
@@ -769,7 +881,7 @@ async function tempHome(): Promise<string> {
   return tempDir('forge-home-');
 }
 
-async function tempDir(prefix: 'forge-fixture-' | 'forge-home-' | 'forge-invalid-'): Promise<string> {
+async function tempDir(prefix: 'forge-fixture-' | 'forge-home-' | 'forge-invalid-' | 'forge-plugin-'): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
@@ -786,7 +898,7 @@ function isTestTempDir(dir: string): boolean {
   const normalized = path.resolve(dir);
   const parent = path.dirname(normalized);
   const name = path.basename(normalized);
-  return parent === path.resolve(os.tmpdir()) && /^(forge-fixture-|forge-home-|forge-invalid-)/.test(name);
+  return parent === path.resolve(os.tmpdir()) && /^(forge-fixture-|forge-home-|forge-invalid-|forge-plugin-)/.test(name);
 }
 
 async function withCwd<T>(cwd: string, run: () => Promise<T>): Promise<T> {

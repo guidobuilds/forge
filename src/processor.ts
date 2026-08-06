@@ -45,21 +45,26 @@ export function parseScope(value: string): Scope | undefined {
   return value === 'user' || value === 'project' ? value : undefined;
 }
 
-export async function buildWritePlan(options: ProcessOptions): Promise<WritePlan & { sourceCount: number }> {
-  const { sources, diagnostics } = await discoverSources(options.source);
+export async function discoverArtifacts(source: string): Promise<{ artifacts: CanonicalArtifact[]; diagnostics: Diagnostic[]; sourceCount: number }> {
+  const { sources, diagnostics } = await discoverSources(source);
   const artifacts: CanonicalArtifact[] = [];
   const seen = new Set<string>();
-  for (const source of sources) {
-    const converted = convertSource(source, options.source);
+  for (const item of sources) {
+    const converted = convertSource(item, source);
     diagnostics.push(...converted.diagnostics);
     if (!converted.item) continue;
     if (seen.has(converted.item.name)) {
-      diagnostics.push(diagnostic('error', 'DUPLICATE_NAME', `Duplicate artifact name ${converted.item.name}`, { sourcePath: source.sourcePath }));
+      diagnostics.push(diagnostic('error', 'DUPLICATE_NAME', `Duplicate artifact name ${converted.item.name}`, { sourcePath: item.sourcePath }));
       continue;
     }
     seen.add(converted.item.name);
     artifacts.push(converted.item);
   }
+  return { artifacts, diagnostics, sourceCount: sources.length };
+}
+
+export async function buildWritePlan(options: ProcessOptions): Promise<WritePlan & { sourceCount: number }> {
+  const { artifacts, diagnostics, sourceCount } = await discoverArtifacts(options.source);
   const files: OutputFile[] = [];
   const pending: PendingDecisions = { modifiedOverwrites: [], foreignOverwrites: [] };
   if (!diagnostics.some((item) => item.severity === 'error')) {
@@ -75,7 +80,7 @@ export async function buildWritePlan(options: ProcessOptions): Promise<WritePlan
       diagnostics.push(...await classifyDestinations(files, options.manifest, options.backupRoot, anchor, pending));
     }
   }
-  return { files, diagnostics, pending, sourceCount: sources.length };
+  return { files, diagnostics, pending, sourceCount };
 }
 
 function convertSource(source: SourceItem, sourceRoot: string): { item?: CanonicalArtifact; diagnostics: Diagnostic[] } {

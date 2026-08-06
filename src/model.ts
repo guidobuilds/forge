@@ -82,3 +82,8 @@ export function isPlatform(value: string): value is Platform {
 export function hasPendingDecisions(pending: PendingDecisions): boolean {
   return pending.modifiedOverwrites.length > 0 || pending.foreignOverwrites.length > 0;
 }
+
+export type PluginFile = {
+  relativePath: string;
+  content: string;
+};
