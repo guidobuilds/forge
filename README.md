@@ -126,6 +126,52 @@ Validate a local Forge source tree:
 npx @guidobuilds/forge-ai validate --source .
 ```
 
+### Claude Code plugin (alternative to the CLI installer)
+
+Claude Code users can also install Forge as a plugin, using Claude Code's built-in marketplace mechanism instead of (or alongside) the CLI installer above:
+
+```
+/plugin marketplace add guidobuilds/forge
+/plugin install forge@guidobuilds
+```
+
+Things to know before switching to this channel:
+
+- **Claude Code channel.** Codex also has its own plugin channel (below); OpenCode and Grok Build remain CLI-only.
+- **The entry point changes.** Plugin skills are always namespaced, so the orchestrator is invoked as `/forge:forge`, not the bare `/forge` used by a CLI-pushed install. Claude can still auto-load the `forge` skill from its description without you typing a slash command at all — this is Claude Code's general skill-invocation mechanism (skills are automatically discovered and can be invoked by Claude based on task context), not something specific to the plugin — a practical mitigation, but not a guaranteed substitute for the namespaced command.
+- **Auto-update is off by default.** Official Anthropic-managed marketplaces have auto-update enabled by default; third-party marketplaces like `guidobuilds` default to auto-update off, so you need to explicitly run `/plugin update forge@guidobuilds` (or toggle auto-update on for the `guidobuilds` marketplace) to pick up new releases.
+- **Same source, two channels.** The plugin package and the CLI-pushed files are both generated from the same canonical `artifacts/` source (via `forge-ai build-plugin`), so behavior is consistent — the plugin is not a fork of the CLI content.
+- **Not yet live:** `/plugin marketplace add guidobuilds/forge` requires this repo's generated `forge-plugin/` and `.claude-plugin/` directories to be committed and pushed first (see the release process in `CONTRIBUTING.md`). The marketplace/install mechanics were independently verified end-to-end against a real git-clone-based install, but not yet against a pushed `guidobuilds/forge` itself.
+
+### Codex plugin (alternative to the CLI installer)
+
+Codex can install Forge from this repository as a standalone, skills-only plugin:
+
+```sh
+codex plugin marketplace add guidobuilds/forge --ref main
+codex plugin add forge@guidobuilds-forge
+```
+
+Open a new Codex session after installation. The plugin exposes one public `forge` skill and keeps the worker, leaf, adversary, routing, and grill contracts as private references. Codex plugins cannot register `.codex/agents/*.toml`, so Forge spawns standard/default Codex sub-agents and injects the complete applicable contract. When sub-agent spawning is unavailable it uses a documented sequential inline fallback.
+
+This is independent from the direct CLI channel:
+
+```sh
+npx @guidobuilds/forge-ai install --platform codex --scope user
+npx @guidobuilds/forge-ai update --platform codex --scope user
+```
+
+Choose one channel when possible. Installing both does not overwrite the other channel's files, but it can expose duplicate Forge workflows. Update or remove Forge using the same channel used to install it.
+
+To refresh or uninstall the marketplace channel:
+
+```sh
+codex plugin marketplace upgrade guidobuilds-forge
+codex plugin remove forge@guidobuilds-forge
+# Optional after removing Forge:
+codex plugin marketplace remove guidobuilds-forge
+```
+
 ## How to Use
 
 Forge installs the **same operating model** on every agent, but **how you invoke it differs per platform**, because each agent exposes different primitives (skills, subagents, agent switching). The installer is only step one — this section is how you actually drive Forge once it is installed.
@@ -174,10 +220,10 @@ Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator h
 
 | Piece | Installed as | Location |
 |---|---|---|
-| `forge`, `forge-worker`, `forge-adversary` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
+| `forge`, `forge-worker`, `forge-worker-leaf`, `forge-adversary` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
 | `using-forge`, `forge-grill` | skills | `~/.agents/skills/` (or `.agents/skills/` per project) |
 
-Codex support is the most partial of the three: Forge writes the agent `.toml` files but does not generate `AGENTS.md` or profiles, so wiring them into a Codex run may take manual steps. Treat Codex support as experimental.
+The direct CLI channel writes agent `.toml` files but does not generate `AGENTS.md` or profiles. The plugin channel instead uses one skill plus injected private role contracts, so it needs no separate agent installation.
 
 ### Project vs user scope
 

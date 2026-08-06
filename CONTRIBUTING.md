@@ -11,3 +11,13 @@ Good contributions tend to improve one of these areas:
 - examples from real code-agent workflows
 
 Please keep changes small, practical, and aligned with Forge's core bias: the lightest safe workflow and the smallest viable change.
+
+Looking to cut a release? See [RELEASING.md](RELEASING.md).
+
+When canonical artifacts or plugin emitters change, regenerate and verify both committed packages:
+
+```sh
+node bin/forge-ai.mjs build-plugin --target claude --source . --out forge-plugin --force
+node bin/forge-ai.mjs build-plugin --target codex --source . --out plugins/forge --force
+npm run build && node scripts/check-plugin-sync.mjs
+```

@@ -10,16 +10,20 @@ import { formatDiagnostic, hasErrors } from './diagnostics.js';
 import { buildManifest, classifyPruneEntries, loadManifest, pruneEntries, resolveBackupPath, resolveBackupRoot, resolveManifestLocation, saveManifest, staleEntries, type PrunePlanItem } from './manifest.js';
 import { buildWritePlan, parsePlatform, parseScope } from './processor.js';
 import { runSelfUpdate } from './self-update.js';
+import { runBuildPlugin } from './build-plugin.js';
 import { checkLatestVersion, formatVersionNotice } from './version-check.js';
 import { writeOutputs } from './writer.js';
 import { hasPendingDecisions, type Diagnostic, type OutputFile, type PlatformArg, type Scope, type WritePlan } from './model.js';
 
-type Command = 'validate' | 'install' | 'update' | 'self-update';
+type Command = 'validate' | 'install' | 'update' | 'self-update' | 'build-plugin';
 type CliOptions = {
   command?: string;
   platform: PlatformArg;
   scope: Scope;
   source: string;
+  out: string;
+  target: 'claude' | 'codex';
+  outExplicit: boolean;
   dryRun: boolean;
   force: boolean;
   prune: boolean;
@@ -79,6 +83,16 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
     : Promise.resolve(undefined);
 
   try {
+    if (command === 'build-plugin') {
+      return await runBuildPlugin({
+        source: options.sourceExplicit ? options.source : bundledSourceRoot(),
+        outDir: options.out,
+        target: options.target,
+        dryRun: options.dryRun,
+        force: options.force,
+      });
+    }
+
     const install = command === 'install' || command === 'update';
     if (install && !options.sourceExplicit) options.source = bundledSourceRoot();
     if (command === 'update' || options.yes) options.force = true;
@@ -183,7 +197,7 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
 }
 
 function parseArgs(argv: string[]): { options: CliOptions } | { error: string } {
-  const options: CliOptions = { command: argv[0], platform: 'all', scope: 'user', source: '.', dryRun: false, force: false, prune: true, yes: false, noUpdateCheck: false, skipSpecUpdate: false, platformExplicit: false, scopeExplicit: false, sourceExplicit: false };
+  const options: CliOptions = { command: argv[0], platform: 'all', scope: 'user', source: '.', out: path.join(process.cwd(), 'forge-plugin'), target: 'claude', outExplicit: false, dryRun: false, force: false, prune: true, yes: false, noUpdateCheck: false, skipSpecUpdate: false, platformExplicit: false, scopeExplicit: false, sourceExplicit: false };
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') options.dryRun = true;
@@ -213,6 +227,16 @@ function parseArgs(argv: string[]): { options: CliOptions } | { error: string } 
       if (!value) return { error: 'Missing --source value' };
       options.source = value;
       options.sourceExplicit = true;
+    } else if (arg === '--out') {
+      const value = argv[++index];
+      if (!value) return { error: 'Missing --out value' };
+      options.out = value;
+      options.outExplicit = true;
+    } else if (arg === '--target') {
+      const value = argv[++index];
+      if (value !== 'claude' && value !== 'codex') return { error: `Invalid --target ${value ?? ''}; expected claude or codex` };
+      options.target = value;
+      if (!options.outExplicit) options.out = path.join(process.cwd(), value === 'claude' ? 'forge-plugin' : 'plugins/forge');
     } else {
       return { error: `Unknown argument ${arg}` };
     }
@@ -223,6 +247,7 @@ function parseArgs(argv: string[]): { options: CliOptions } | { error: string } 
   if (command === 'validate' && (options.dryRun || options.force || options.yes || options.scopeExplicit)) return { error: 'validate only accepts --platform and --source' };
   if (command !== 'self-update' && (options.targetVersion !== undefined || options.skipSpecUpdate)) return { error: '--to and --skip-spec-update are only accepted for self-update' };
   if (command === 'self-update' && (options.platformExplicit || options.scopeExplicit || options.sourceExplicit || options.force || options.yes)) return { error: 'self-update only accepts --to, --dry-run, --skip-spec-update' };
+  if (command === 'build-plugin' && (options.platformExplicit || options.scopeExplicit || options.yes)) return { error: 'build-plugin only accepts --target, --source, --out, --dry-run, --force' };
   return { options };
 }
 
@@ -307,6 +332,7 @@ function normalizeCommand(command?: string): Command | undefined {
   if (command === 'update' || command === 'upgrade') return 'update';
   if (command === 'validate') return 'validate';
   if (command === 'self-update') return 'self-update';
+  if (command === 'build-plugin') return 'build-plugin';
   return undefined;
 }
 
@@ -352,6 +378,7 @@ function showUsage(): void {
   console.log('       forge-ai update [--platform opencode|claude|codex|grok|all] [--scope user|project] [--source <dir>] [--dry-run] [--no-prune] [--yes]');
   console.log('       forge-ai validate [--platform opencode|claude|codex|grok|all] [--source <dir>]');
   console.log('       forge-ai self-update [--to <version>] [--dry-run] [--skip-spec-update]');
+  console.log('       forge-ai build-plugin [--target claude|codex] [--out <dir>] [--source <dir>] [--dry-run] [--force]');
   console.log('');
   console.log('Global flags: --no-update-check (also FORGE_NO_UPDATE_CHECK=1 or CI=true)');
 }
