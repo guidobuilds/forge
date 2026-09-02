@@ -1,14 +1,18 @@
 import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { renderClaudeAgent, renderClaudeSkill } from './adapters/claude.js';
 import { renderCodexAgent, renderCodexSkill } from './adapters/codex.js';
 import { renderGrokAgent, renderGrokSkill } from './adapters/grok.js';
 import { renderOpenCodeAgent, renderOpenCodeSkill } from './adapters/opencode.js';
+import { composeBody } from './compose.js';
 import { diagnostic } from './diagnostics.js';
 import { discoverSources } from './discovery.js';
 import { lookupEntryByPath, resolveBackupPath, sha256, type AssetManifest } from './manifest.js';
-import { resolveOutputPath } from './paths.js';
+import { getModelPreference, type ModelPreferences } from './model-preferences.js';
+import { openCodeUserRoots, resolveOpenCodeUserV2Path, resolveOutputPath } from './paths.js';
+import { supportsModel } from './platform-capabilities.js';
 import { isPlatform, platforms, type CanonicalArtifact, type Diagnostic, type FileStatus, type OpenCodeMode, type OutputFile, type PendingDecisions, type Platform, type PlatformArg, type Scope, type SourceItem, type SourceKind, type WritePlan } from './model.js';
 
 const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -31,6 +35,7 @@ export type ProcessOptions = {
   checkCollisions?: boolean;
   manifest?: AssetManifest;
   backupRoot?: string;
+  modelPreferences?: ModelPreferences;
 };
 
 export function resolvePlatforms(platform: PlatformArg): Platform[] {
@@ -71,7 +76,12 @@ export async function buildWritePlan(options: ProcessOptions): Promise<WritePlan
     for (const platform of resolvePlatforms(options.platform)) {
       for (const artifact of artifacts) {
         const effectiveKind = artifact[platform]?.kind ?? artifact.kind;
-        files.push(renderFile(platform, effectiveKind, artifact, options, diagnostics));
+        const rendered = renderFile(platform, effectiveKind, artifact, options, diagnostics);
+        if (platform === 'opencode' && options.scope === 'user') {
+          files.push(...await expandOpenCodeUserTargets(rendered, options.home ?? homedir(), diagnostics));
+        } else {
+          files.push(rendered);
+        }
       }
     }
     files.sort((a, b) => `${a.platform}:${a.kind}:${a.name}`.localeCompare(`${b.platform}:${b.kind}:${b.name}`));
@@ -133,9 +143,6 @@ function convertSource(source: SourceItem, sourceRoot: string): { item?: Canonic
   if (kind === undefined) diagnostics.push(diagnostic('error', 'MISSING_KIND', 'artifact kind is required (agent or skill)', { sourcePath: source.sourcePath }));
   else if (!artifactKinds.has(kind as SourceKind)) diagnostics.push(diagnostic('error', 'INVALID_KIND', 'artifact kind must be one of agent, skill', { sourcePath: source.sourcePath }));
   if (!source.body.trim()) diagnostics.push(diagnostic('error', 'EMPTY_BODY', 'artifact body is required', { sourcePath: source.sourcePath }));
-  const bodyLines = source.body.split('\n').length;
-  const bodyBudget = bodyLineBudgets[name ?? source.expectedName] ?? defaultBodyBudget;
-  if (bodyLines > bodyBudget) diagnostics.push(diagnostic('info', 'BODY_OVER_BUDGET', `artifact body is ${bodyLines} lines (soft budget ${bodyBudget}); keep always-loaded harness files small`, { sourcePath: source.sourcePath }));
   if (!name || !description || !artifactKinds.has(kind as SourceKind) || !source.body.trim() || diagnostics.some((item) => item.severity === 'error')) return { diagnostics };
   return {
     diagnostics,
@@ -160,11 +167,48 @@ function productConfig(value: unknown) {
 }
 
 function renderFile(platform: Platform, kind: SourceKind, artifact: CanonicalArtifact, options: ProcessOptions, diagnostics: Diagnostic[]): OutputFile {
+  const composedBody = composeBody(artifact.body, platform);
+  const bodyLines = composedBody.split('\n').length;
+  const bodyBudget = bodyLineBudgets[artifact.name] ?? defaultBodyBudget;
+  if (bodyLines > bodyBudget) diagnostics.push(diagnostic('info', 'BODY_OVER_BUDGET', `${platform} ${artifact.name} body is ${bodyLines} lines (soft budget ${bodyBudget}); keep always-loaded harness files small`, { sourcePath: artifact.sourcePath, platform }));
+  let composed: CanonicalArtifact = { ...artifact, body: composedBody };
+  const modelOverride = options.modelPreferences && supportsModel(platform, kind) ? getModelPreference(options.modelPreferences, platform, artifact.name) : undefined;
+  if (modelOverride) composed = { ...composed, [platform]: { ...composed[platform], model: modelOverride } };
   const rendered = kind === 'agent'
-    ? platform === 'opencode' ? renderOpenCodeAgent(artifact) : platform === 'claude' ? renderClaudeAgent(artifact) : platform === 'grok' ? renderGrokAgent(artifact) : renderCodexAgent(artifact)
-    : platform === 'opencode' ? renderOpenCodeSkill(artifact) : platform === 'claude' ? renderClaudeSkill(artifact) : platform === 'grok' ? renderGrokSkill(artifact) : renderCodexSkill(artifact);
+    ? platform === 'opencode' ? renderOpenCodeAgent(composed) : platform === 'claude' ? renderClaudeAgent(composed) : platform === 'grok' ? renderGrokAgent(composed) : renderCodexAgent(composed)
+    : platform === 'opencode' ? renderOpenCodeSkill(composed) : platform === 'claude' ? renderClaudeSkill(composed) : platform === 'grok' ? renderGrokSkill(composed) : renderCodexSkill(composed);
   diagnostics.push(...rendered.diagnostics);
   return { platform, kind, scope: options.scope, name: artifact.name, sourcePath: artifact.sourcePath, path: resolveOutputPath(platform, kind, options.scope, artifact.name, options.cwd, options.home), content: rendered.content };
+}
+
+// `renderFile` above always computes OpenCode's v1 path (`~/.config/opencode/...`) for user scope
+// — that stays the default target. v1 and the v2 preview (`opencode2`) read user-scope
+// agents/skills from different directories (see src/paths.ts), and a machine can have either,
+// both, or — before OpenCode has ever run — neither. Writing v2's directory unconditionally would
+// silently create config for a generation that isn't actually installed; skipping v1 whenever v2
+// is present would regress the long-supported default. So: write to each generation's directory
+// only if it already exists on disk, and if neither does, keep today's behavior (write v1) rather
+// than silently installing nothing.
+async function expandOpenCodeUserTargets(base: OutputFile, home: string, diagnostics: Diagnostic[]): Promise<OutputFile[]> {
+  const roots = openCodeUserRoots(home);
+  const [v1Exists, v2Exists] = await Promise.all([pathExists(roots.v1), pathExists(roots.v2)]);
+  if (!v1Exists && !v2Exists) {
+    diagnostics.push(diagnostic('info', 'OPENCODE_USER_ROOT_NOT_FOUND', `Neither ${roots.v1} (v1) nor ${roots.v2} (v2) exists yet; installing to the v1 default. Run OpenCode at least once, then re-run \`forge-ai install\`/\`update\`, to also cover whichever generation you actually use.`, { platform: 'opencode', sourcePath: base.sourcePath }));
+    return [base];
+  }
+  const files: OutputFile[] = [];
+  if (v1Exists) files.push(base);
+  if (v2Exists) files.push({ ...base, path: resolveOpenCodeUserV2Path(base.kind, base.name, home) });
+  return files;
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await access(target, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function classifyDestinations(files: OutputFile[], manifest: AssetManifest | undefined, backupRoot: string | undefined, anchor: string, pending: PendingDecisions): Promise<Diagnostic[]> {

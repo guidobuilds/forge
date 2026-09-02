@@ -38,5 +38,8 @@ export function renderGrokSkill(artifact: CanonicalArtifact): { content: string;
   if (artifact.grok?.model) {
     diagnostics.push(diagnostic('info', 'GROK_SKILL_MODEL_IGNORED', `Grok skill model is not emitted for ${artifact.name}`, { platform: 'grok' }));
   }
+  if (artifact.claude?.['user-invocable'] === false) {
+    diagnostics.push(diagnostic('warning', 'GROK_SKILL_DISCOVERABLE_UNENFORCED', `${artifact.name} is meant to be background-only, but Grok has no mechanism to hide a skill from direct invocation — it will be directly invocable here`, { platform: 'grok' }));
+  }
   return { content: `${stringifyYaml({ name: artifact.name, description: artifact.description })}${artifact.body}\n`, diagnostics };
 }

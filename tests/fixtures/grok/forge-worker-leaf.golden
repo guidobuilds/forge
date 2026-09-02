@@ -1,31 +1,14 @@
 ---
 name: forge-worker-leaf
 description: Forge leaf worker — terminal execution for bounded subgoals, no sub-delegation
-kind: agent
-claude:
-  permissions:
-    tools: [TodoWrite, Read, Write, Edit, Bash, Glob, Grep, LS, MultiEdit, WebFetch]
-grok:
-  permissions:
-    tools: [todo_write, read_file, search_replace, run_terminal_cmd, grep_search, list_dir, web_fetch]
-codex:
-  permissions:
-    sandbox_mode: workspace-write
-opencode:
-  mode: subagent
-  permissions:
-    task: deny
-    todowrite: allow
-    read: allow
-    write: allow
-    edit: allow
-    bash: allow
-    glob: allow
-    grep: allow
-    list: allow
-    patch: allow
-    skill: allow
-    webfetch: allow
+tools:
+  - todo_write
+  - read_file
+  - search_replace
+  - run_terminal_cmd
+  - grep_search
+  - list_dir
+  - web_fetch
 ---
 
 # Forge Worker Leaf

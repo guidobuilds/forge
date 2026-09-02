@@ -1,9 +1,0 @@
-{
-  "name": "forge",
-  "version": "0.7.0",
-  "description": "Forge: a thin orchestrator with delegated workers, plans, and adversarial verification.",
-  "author": {
-    "name": "Guido Caffa"
-  },
-  "license": "MIT"
-}

@@ -14,13 +14,17 @@ export const knownClaudeTools = new Set<string>([
   'WebFetch',
   'WebSearch',
   'AskUserQuestion',
-  'ExitPlanMode'
+  'ExitPlanMode',
+  'Skill'
 ]);
 
 const mcpToolPattern = /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_*-]+$/;
+// `Agent(name, name2)` restricts which subagent types an agent running as the main
+// session (via --agent/settings.json) is allowed to spawn — see sub-agents.md.
+export const agentAllowlistPattern = /^Agent\([A-Za-z0-9_-]+(?:,\s*[A-Za-z0-9_-]+)*\)$/;
 
 export function isKnownClaudeTool(name: string): boolean {
-  return knownClaudeTools.has(name) || mcpToolPattern.test(name);
+  return knownClaudeTools.has(name) || mcpToolPattern.test(name) || agentAllowlistPattern.test(name);
 }
 
 export const knownClaudeModels = new Set<string>([

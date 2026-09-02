@@ -13,8 +13,13 @@ import { renderOpenCodeAgent, renderOpenCodeSkill } from '../src/adapters/openco
 import { main } from '../src/cli.js';
 import { discoverSources } from '../src/discovery.js';
 import { parseFrontmatter } from '../src/frontmatter.js';
-import { buildManifest, hashProjectPath, resolveManifestLocation, saveManifest, sha256, type AssetManifest } from '../src/manifest.js';
-import { buildWritePlan } from '../src/processor.js';
+import { buildManifest, hashProjectPath, legacyStateRoot, loadManifest, migrateStateDirectory, resolveManifestLocation, saveManifest, sha256, type AssetManifest } from '../src/manifest.js';
+import { composeBody } from '../src/compose.js';
+import { DISPATCH_SNIPPETS } from '../src/dispatch-snippets.js';
+import { discoverOpenCodeModels } from '../src/opencode-discovery.js';
+import { getModelPreference, loadModelPreferences, saveModelPreferences, setModelPreference } from '../src/model-preferences.js';
+import { supportsModel } from '../src/platform-capabilities.js';
+import { buildWritePlan, discoverArtifacts } from '../src/processor.js';
 import { buildUpdateCommand, detectInstallMethod, runSelfUpdate } from '../src/self-update.js';
 import { checkLatestVersion, compareSemver, formatVersionNotice } from '../src/version-check.js';
 import { writeOutputs } from '../src/writer.js';
@@ -71,6 +76,22 @@ test('adapters emit platform-specific outputs', () => {
   assert.match(renderCodexAgent(agent).content, /developer_instructions =/);
   assert.match(renderCodexAgent(agent).content, /sandbox_mode = "workspace-write"/);
   assert.match(renderCodexSkill(skill).content, /name: test-skill/);
+});
+
+test('opencode agent warns on a model with no provider prefix, accepts provider/model shapes including nested slashes', () => {
+  const noSlash: CanonicalArtifact = { ...agent, opencode: { model: 'sonnet' } };
+  assert.ok(renderOpenCodeAgent(noSlash).diagnostics.some((item) => item.code === 'OPENCODE_UNKNOWN_MODEL'));
+  const simple: CanonicalArtifact = { ...agent, opencode: { model: 'anthropic/claude-sonnet-4-5' } };
+  assert.equal(renderOpenCodeAgent(simple).diagnostics.length, 0);
+  const nested: CanonicalArtifact = { ...agent, opencode: { model: 'openrouter/openai/gpt-5-chat' } };
+  assert.equal(renderOpenCodeAgent(nested).diagnostics.length, 0);
+});
+
+test('codex agent accepts any non-whitespace model (format unverified, permissive by design)', () => {
+  const withModel: CanonicalArtifact = { ...agent, codex: { model: 'gpt-5.1-codex-max' } };
+  assert.equal(renderCodexAgent(withModel).diagnostics.filter((item) => item.code === 'CODEX_UNKNOWN_MODEL').length, 0);
+  const withSpace: CanonicalArtifact = { ...agent, codex: { model: 'not a model' } };
+  assert.ok(renderCodexAgent(withSpace).diagnostics.some((item) => item.code === 'CODEX_UNKNOWN_MODEL'));
 });
 
 test('claude agent omits tools when no permissions are provided', () => {
@@ -180,6 +201,18 @@ test('grok skill emits only name and description, drops model and permissions', 
   assert.ok(rendered.diagnostics.some((item) => item.code === 'GROK_SKILL_MODEL_IGNORED'));
 });
 
+test('grok skill warns when a background-only skill has no way to be hidden from direct invocation', () => {
+  const backgroundOnly: CanonicalArtifact = { ...skill, claude: { 'user-invocable': false } };
+  const rendered = renderGrokSkill(backgroundOnly);
+  assert.ok(rendered.diagnostics.some((item) => item.code === 'GROK_SKILL_DISCOVERABLE_UNENFORCED'));
+});
+
+test('opencode skill warns when a background-only skill has no way to be hidden from direct invocation', () => {
+  const backgroundOnly: CanonicalArtifact = { ...skill, claude: { 'user-invocable': false } };
+  const rendered = renderOpenCodeSkill(backgroundOnly);
+  assert.ok(rendered.diagnostics.some((item) => item.code === 'OPENCODE_SKILL_DISCOVERABLE_UNENFORCED'));
+});
+
 test('processor validates sources and generates dry-run plan paths', async () => {
   const root = await fixtureRoot();
   const home = await tempHome();
@@ -191,6 +224,47 @@ test('processor validates sources and generates dry-run plan paths', async () =>
   assert.ok(plan.files.some((file) => file.path.endsWith('.agents/skills/test-skill/SKILL.md')));
   assert.ok(plan.files.some((file) => file.path.endsWith('.grok/agents/test-agent.md')));
   assert.ok(plan.files.some((file) => file.path.endsWith('.grok/skills/test-skill/SKILL.md')));
+});
+
+test('OpenCode user-scope install targets v1, v2, both, or neither based on which directory actually exists', async () => {
+  const root = await fixtureRoot();
+
+  // Neither ~/.config/opencode nor ~/.opencode exists yet — default to v1's path (today's
+  // long-standing behavior) rather than silently installing nothing, plus an info diagnostic.
+  const neitherHome = await tempHome();
+  const neitherPlan = await buildWritePlan({ source: root, platform: 'opencode', scope: 'user', home: neitherHome, cwd: root });
+  assert.equal(neitherPlan.files.length, 2);
+  assert.ok(neitherPlan.files.every((file) => file.path.includes('/.config/opencode/')));
+  assert.ok(neitherPlan.diagnostics.some((item) => item.code === 'OPENCODE_USER_ROOT_NOT_FOUND'));
+
+  // Only v1's directory exists — v1 only, no diagnostic, no v2 file.
+  const v1Home = await tempHome();
+  await mkdir(path.join(v1Home, '.config', 'opencode'), { recursive: true });
+  const v1Plan = await buildWritePlan({ source: root, platform: 'opencode', scope: 'user', home: v1Home, cwd: root });
+  assert.equal(v1Plan.files.length, 2);
+  assert.ok(v1Plan.files.every((file) => file.path.includes('/.config/opencode/')));
+  assert.ok(!v1Plan.diagnostics.some((item) => item.code === 'OPENCODE_USER_ROOT_NOT_FOUND'));
+
+  // Only v2's directory exists (e.g. a v2-only install with no `opencode` v1 binary ever run) —
+  // this is the exact scenario that silently produced zero visible OpenCode files before this fix.
+  const v2Home = await tempHome();
+  await mkdir(path.join(v2Home, '.opencode'), { recursive: true });
+  const v2Plan = await buildWritePlan({ source: root, platform: 'opencode', scope: 'user', home: v2Home, cwd: root });
+  assert.equal(v2Plan.files.length, 2);
+  assert.ok(v2Plan.files.every((file) => file.path.includes('/.opencode/') && !file.path.includes('/.config/opencode/')));
+
+  // Both exist — write both, one file per artifact per generation.
+  const bothHome = await tempHome();
+  await mkdir(path.join(bothHome, '.config', 'opencode'), { recursive: true });
+  await mkdir(path.join(bothHome, '.opencode'), { recursive: true });
+  const bothPlan = await buildWritePlan({ source: root, platform: 'opencode', scope: 'user', home: bothHome, cwd: root });
+  assert.equal(bothPlan.files.length, 4);
+  assert.equal(bothPlan.files.filter((file) => file.path.includes('/.config/opencode/')).length, 2);
+  assert.equal(bothPlan.files.filter((file) => file.path.includes('/.opencode/') && !file.path.includes('/.config/opencode/')).length, 2);
+
+  // Project scope is untouched by any of this — v1 and v2 already share `.opencode/` there.
+  const projectPlan = await buildWritePlan({ source: root, platform: 'opencode', scope: 'project', cwd: root });
+  assert.equal(projectPlan.files.length, 2);
 });
 
 test('processor rejects invalid fields and name mismatch', async () => {
@@ -252,6 +326,63 @@ test('per-platform kind override renders the alternate artifact kind', async () 
   assert.ok(plan.files.some((file) => file.platform === 'opencode' && file.kind === 'agent' && file.path.endsWith('.config/opencode/agents/dual.md')));
 });
 
+test('supportsModel is true for agent-kind on every platform, and for skill-kind only on Claude', () => {
+  for (const platform of ['claude', 'opencode', 'codex', 'grok'] as const) assert.equal(supportsModel(platform, 'agent'), true);
+  assert.equal(supportsModel('claude', 'skill'), true);
+  assert.equal(supportsModel('opencode', 'skill'), false);
+  assert.equal(supportsModel('codex', 'skill'), false);
+  assert.equal(supportsModel('grok', 'skill'), false);
+});
+
+test('model preferences round-trip through set/get and save/load', async () => {
+  const home = await tempHome();
+  const prefsPath = path.join(home, 'model-preferences.json');
+  let prefs = await loadModelPreferences(prefsPath);
+  assert.deepEqual(prefs, {});
+  prefs = setModelPreference(prefs, 'claude', 'forge', 'opus');
+  prefs = setModelPreference(prefs, 'opencode', 'forge-worker', 'anthropic/claude-sonnet-4-5');
+  await saveModelPreferences(prefsPath, prefs);
+  const reloaded = await loadModelPreferences(prefsPath);
+  assert.equal(getModelPreference(reloaded, 'claude', 'forge'), 'opus');
+  assert.equal(getModelPreference(reloaded, 'opencode', 'forge-worker'), 'anthropic/claude-sonnet-4-5');
+  assert.equal(getModelPreference(reloaded, 'grok', 'forge'), undefined);
+});
+
+test('buildWritePlan applies a model preference override only where the platform/kind supports model', async () => {
+  const root = await tempDir('forge-fixture-');
+  const home = await tempHome();
+  await writeArtifact(root, 'dual', 'name: dual\ndescription: Dual artifact\nkind: agent\nclaude:\n  kind: skill\n  model: sonnet');
+  const modelPreferences = setModelPreference({}, 'claude', 'dual', 'opus');
+  const withOverride = setModelPreference(modelPreferences, 'opencode', 'dual', 'anthropic/claude-opus-4-1');
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'user', home, cwd: root, modelPreferences: withOverride });
+  const claudeFile = plan.files.find((f) => f.platform === 'claude' && f.name === 'dual')!;
+  assert.match(claudeFile.content, /model: opus/);
+  const opencodeFile = plan.files.find((f) => f.platform === 'opencode' && f.name === 'dual')!;
+  assert.match(opencodeFile.content, /model: anthropic\/claude-opus-4-1/);
+});
+
+test('discoverOpenCodeModels returns parsed lines from the first successful runner, undefined if all fail', () => {
+  const calls: string[] = [];
+  const succeeding = discoverOpenCodeModels('/tmp', 1000, (command) => {
+    calls.push(command);
+    if (command === 'opencode') return { status: 0, stdout: 'anthropic/claude-sonnet-4-5\nopenai/gpt-5.2\n\nnot-a-model-line\n' };
+    return { status: null, stdout: '' };
+  });
+  assert.deepEqual(succeeding, ['anthropic/claude-sonnet-4-5', 'openai/gpt-5.2']);
+  assert.deepEqual(calls, ['opencode']);
+
+  // v1 absent (or fails) falls through to v2's `models` command (real since anomalyco/opencode
+  // commit 30d14000, 2026-08-06) — e.g. a v2-only install with no `opencode` binary on PATH.
+  const fallback = discoverOpenCodeModels('/tmp', 1000, (command) => (command === 'opencode2' ? { status: 0, stdout: 'acme/qwen3-coder\n' } : { status: 1, stdout: '' }));
+  assert.deepEqual(fallback, ['acme/qwen3-coder']);
+
+  // Both absent, or an old pre-30d14000 v2 build where `opencode2 models` has no such subcommand
+  // and errors out (see src/opencode-discovery.ts) — either way, undefined for the free-text
+  // fallback, never a thrown error.
+  const allFail = discoverOpenCodeModels('/tmp', 1000, () => ({ status: null, stdout: '' }));
+  assert.equal(allFail, undefined);
+});
+
 test('foreign destination classifies as overwrite with warning, never error', async () => {
   const root = await fixtureRoot();
   const target = path.join(root, '.opencode', 'agents', 'test-agent.md');
@@ -291,7 +422,7 @@ test('managed-modified destination is backed up and overwritten with --yes', asy
     const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
     assert.equal(output.code, 0);
     assert.match(output.stdout, /MANAGED_FILE_OVERWRITE/);
-    assert.match(output.stdout, /\[overwrite, backup -> .+\.forge-ai\/backups\/projects\//);
+    assert.match(output.stdout, /\[overwrite, backup -> .+\.forge\/state\/backups\/projects\//);
     assert.match(await readFile(target, 'utf8'), /Do useful work/);
     const backupMatch = output.stdout.match(/backup -> ([^\s\]]+)/);
     assert.ok(backupMatch, 'backup path printed');
@@ -324,14 +455,18 @@ test('dry-run on managed-modified file reports classification without writing or
     assert.equal(output.code, 0);
     assert.match(output.stdout, /MANAGED_FILE_OVERWRITE/);
     assert.equal(await readFile(target, 'utf8'), 'my edits');
-    const stateRoot = path.join(home, '.forge-ai', 'backups');
-    await assert.rejects(access(stateRoot));
+    const backupsRoot = path.join(home, '.forge', 'state', 'backups');
+    await assert.rejects(access(backupsRoot));
   });
 });
 
 test('install keeps non-interactive defaults when no flags are provided', async () => {
   const root = await fixtureRoot();
-  const output = await captureConsole(() => main(['install', '--source', root, '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  // Explicit isolated HOME, not the real machine's — otherwise this varies with whether the
+  // developer's own ~/.config/opencode or ~/.opencode happens to exist (see the OpenCode
+  // user-scope dual-target expansion in src/processor.ts).
+  const home = await tempHome();
+  const output = await captureConsole(() => main(['install', '--source', root, '--dry-run'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
   assert.match(output.stdout, /install: 2 source\(s\), 8 output\(s\)/);
   assert.match(output.stdout, /\.config\/opencode\/agents\/test-agent\.md/);
@@ -370,7 +505,7 @@ test('install force overwrites existing outputs through the CLI', async () => {
     assert.match(output.stdout, /FOREIGN_FILE_OVERWRITE/);
     assert.match(await readFile(target, 'utf8'), /Do useful work/);
     const location = await resolveManifestLocation('project', root, home);
-    assert.equal(path.dirname(path.dirname(path.dirname(location.manifestPath))), path.join(home, '.forge-ai'));
+    assert.equal(path.dirname(path.dirname(path.dirname(location.manifestPath))), path.join(home, '.forge', 'state'));
     await access(location.manifestPath);
   });
 });
@@ -389,7 +524,7 @@ test('update overwrites existing outputs without a separate force flag', async (
     assert.match(output.stdout, /FOREIGN_FILE_OVERWRITE/);
     assert.match(await readFile(target, 'utf8'), /Do useful work/);
     const location = await resolveManifestLocation('project', root, home);
-    assert.equal(path.dirname(path.dirname(path.dirname(location.manifestPath))), path.join(home, '.forge-ai'));
+    assert.equal(path.dirname(path.dirname(path.dirname(location.manifestPath))), path.join(home, '.forge', 'state'));
     await access(location.manifestPath);
   });
 });
@@ -401,7 +536,7 @@ test('project manifest path is based on canonical project path hash', async () =
   const canonicalRoot = await realpath(root);
   assert.equal(location.projectPath, canonicalRoot);
   assert.equal(location.projectPathHash, hashProjectPath(canonicalRoot));
-  assert.equal(location.manifestPath, path.join(home, '.forge-ai', 'projects', location.projectPathHash!, 'manifest.json'));
+  assert.equal(location.manifestPath, path.join(home, '.forge', 'state', 'projects', location.projectPathHash!, 'manifest.json'));
 });
 
 test('install writes a managed asset manifest', async () => {
@@ -413,13 +548,94 @@ test('install writes a managed asset manifest', async () => {
     const location = await resolveManifestLocation('project', root, home);
     const canonicalRoot = await realpath(root);
     const manifest = JSON.parse(await readFile(location.manifestPath, 'utf8')) as AssetManifest;
-    assert.equal(manifest.schemaVersion, 1);
+    assert.equal(manifest.schemaVersion, 2);
+    assert.ok(manifest.forgeVersion.length > 0);
+    assert.ok(manifest.entries.every((entry) => entry.forgeVersion === manifest.forgeVersion));
     assert.equal(manifest.scope, 'project');
     assert.equal(manifest.projectPath, canonicalRoot);
     assert.equal(manifest.projectPathHash, location.projectPathHash);
     assert.equal(manifest.entries.length, 2);
     assert.ok(manifest.entries.some((entry) => entry.sourcePath === path.join('artifacts', 'test-agent', 'test-agent.md')));
   });
+});
+
+test('sequential single-platform installs merge into the manifest instead of replacing it', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const claudeInstall = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(claudeInstall.code, 0);
+    const opencodeInstall = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(opencodeInstall.code, 0);
+
+    const location = await resolveManifestLocation('project', root, home);
+    const manifest = JSON.parse(await readFile(location.manifestPath, 'utf8')) as AssetManifest;
+    assert.equal(manifest.entries.length, 4);
+    assert.equal(manifest.entries.filter((entry) => entry.platform === 'claude').length, 2);
+    assert.equal(manifest.entries.filter((entry) => entry.platform === 'opencode').length, 2);
+
+    // The claude files must still be on disk and still classify as managed-unmodified on a
+    // subsequent opencode-only run — proving they weren't silently demoted to "foreign" by having
+    // fallen out of the manifest.
+    const followUp = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.doesNotMatch(followUp.stdout, /foreign overwrite/);
+  });
+});
+
+test('loadManifest upgrades a v1 manifest on read, defaulting forgeVersion to unknown', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  const location = await resolveManifestLocation('project', root, home);
+  await saveManifest(location.manifestPath, {
+    schemaVersion: 1,
+    scope: 'project',
+    projectPath: root,
+    projectPathHash: location.projectPathHash,
+    updatedAt: new Date(0).toISOString(),
+    entries: [{ platform: 'opencode', kind: 'agent', name: 'legacy-agent', path: path.join(root, '.opencode', 'agents', 'legacy-agent.md'), sourcePath: 'artifacts/legacy-agent/legacy-agent.md', checksum: sha256('legacy') }]
+  } as unknown as AssetManifest);
+
+  const manifest = await loadManifest(location.manifestPath);
+  assert.equal(manifest?.schemaVersion, 2);
+  assert.equal(manifest?.forgeVersion, 'unknown');
+  assert.equal(manifest?.entries[0].forgeVersion, 'unknown');
+});
+
+test('migrates ~/.forge-ai/ to ~/.forge/state/ on first use, leaving a breadcrumb and never deleting the old copy', async () => {
+  const home = await tempHome();
+  const oldManifestPath = path.join(home, '.forge-ai', 'user-manifest.json');
+  await mkdir(path.dirname(oldManifestPath), { recursive: true });
+  await writeFile(oldManifestPath, JSON.stringify({ schemaVersion: 1, scope: 'user', updatedAt: new Date(0).toISOString(), entries: [] }));
+
+  const migrated = await migrateStateDirectory(home);
+  assert.equal(migrated, true);
+
+  const newManifestPath = path.join(home, '.forge', 'state', 'user-manifest.json');
+  await access(newManifestPath); // copied
+  await access(oldManifestPath); // old copy left in place, not moved
+  const breadcrumb = await readFile(path.join(home, '.forge-ai', 'MIGRATED'), 'utf8');
+  assert.match(breadcrumb, /Forge migrated its install state/);
+});
+
+test('does not migrate, and does not overwrite, when ~/.forge/state/ already exists', async () => {
+  const home = await tempHome();
+  await mkdir(path.join(home, '.forge-ai'), { recursive: true });
+  await writeFile(path.join(home, '.forge-ai', 'user-manifest.json'), 'old-content');
+  await mkdir(path.join(home, '.forge', 'state'), { recursive: true });
+  await writeFile(path.join(home, '.forge', 'state', 'user-manifest.json'), 'new-content');
+
+  const migrated = await migrateStateDirectory(home);
+  assert.equal(migrated, false);
+  assert.equal(await readFile(path.join(home, '.forge', 'state', 'user-manifest.json'), 'utf8'), 'new-content');
+  await assert.rejects(access(path.join(home, '.forge-ai', 'MIGRATED')));
+});
+
+test('a fresh install with neither directory present takes no migration path', async () => {
+  const home = await tempHome();
+  const migrated = await migrateStateDirectory(home);
+  assert.equal(migrated, false);
+  await assert.rejects(access(legacyStateRoot(home)));
+  await assert.rejects(access(path.join(home, '.forge')));
 });
 
 test('update prunes stale manifest entry when checksum matches', async () => {
@@ -431,7 +647,7 @@ test('update prunes stale manifest entry when checksum matches', async () => {
     await mkdir(path.dirname(stalePath), { recursive: true });
     await writeFile(stalePath, 'stale');
     await writeFile(customPath, 'custom');
-    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale') }]);
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale'), forgeVersion: 'test' }]);
 
     const output = await captureConsole(() => main(['update', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
     assert.equal(output.code, 0);
@@ -448,7 +664,7 @@ test('update backs up and deletes stale-modified manifest entry', async () => {
     const stalePath = path.join(root, '.opencode', 'agents', 'stale-agent.md');
     await mkdir(path.dirname(stalePath), { recursive: true });
     await writeFile(stalePath, 'local edit');
-    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale') }]);
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale'), forgeVersion: 'test' }]);
 
     const output = await captureConsole(() => main(['update', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
     assert.equal(output.code, 0);
@@ -467,7 +683,7 @@ test('update --no-prune preserves stale managed files', async () => {
     const stalePath = path.join(root, '.opencode', 'agents', 'stale-agent.md');
     await mkdir(path.dirname(stalePath), { recursive: true });
     await writeFile(stalePath, 'stale');
-    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale') }]);
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale'), forgeVersion: 'test' }]);
 
     const output = await captureConsole(() => main(['update', '--source', root, '--platform', 'opencode', '--scope', 'project', '--no-prune'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
     assert.equal(output.code, 0);
@@ -483,7 +699,7 @@ test('update --dry-run reports deletes without mutating files or manifest', asyn
     const stalePath = path.join(root, '.opencode', 'agents', 'stale-agent.md');
     await mkdir(path.dirname(stalePath), { recursive: true });
     await writeFile(stalePath, 'stale');
-    const location = await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale') }]);
+    const location = await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: stalePath, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('stale'), forgeVersion: 'test' }]);
     const before = await readFile(location.manifestPath, 'utf8');
 
     const output = await captureConsole(() => main(['update', '--source', root, '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
@@ -495,109 +711,327 @@ test('update --dry-run reports deletes without mutating files or manifest', asyn
   });
 });
 
+test('uninstall with no manifest reports nothing to do', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const output = await captureConsole(() => main(['uninstall', '--platform', 'opencode', '--scope', 'project', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /Nothing to uninstall/);
+  });
+});
+
+test('uninstall removes unmodified manifest-tracked files and clears the manifest', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const filePath = path.join(root, '.opencode', 'agents', 'test-agent.md');
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, 'installed content');
+    const location = await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'test-agent', path: filePath, sourcePath: 'artifacts/test-agent/test-agent.md', checksum: sha256('installed content'), forgeVersion: 'test' }]);
+
+    const output = await captureConsole(() => main(['uninstall', '--platform', 'opencode', '--scope', 'project', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /Removed 1 file\(s\)/);
+    await assert.rejects(access(filePath));
+    await assert.rejects(access(location.manifestPath));
+  });
+});
+
+test('uninstall backs up and deletes a locally-edited manifest-tracked file with --yes', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const filePath = path.join(root, '.opencode', 'agents', 'test-agent.md');
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, 'local edit');
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'test-agent', path: filePath, sourcePath: 'artifacts/test-agent/test-agent.md', checksum: sha256('original content'), forgeVersion: 'test' }]);
+
+    const output = await captureConsole(() => main(['uninstall', '--platform', 'opencode', '--scope', 'project', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /delete opencode agent test-agent[^\n]*backup -> /);
+    await assert.rejects(access(filePath));
+    const backupMatch = output.stdout.match(/backup -> ([^\s\]]+)/);
+    assert.ok(backupMatch, 'backup path printed');
+    assert.equal(await readFile(backupMatch![1], 'utf8'), 'local edit');
+  });
+});
+
+test('non-interactive uninstall of a locally-edited file rejects without --yes', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const filePath = path.join(root, '.opencode', 'agents', 'test-agent.md');
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, 'local edit');
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'test-agent', path: filePath, sourcePath: 'artifacts/test-agent/test-agent.md', checksum: sha256('original content'), forgeVersion: 'test' }]);
+
+    const output = await captureConsole(() => main(['uninstall', '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 1);
+    assert.match(output.stderr, /needs your decision/);
+    assert.equal(await readFile(filePath, 'utf8'), 'local edit');
+  });
+});
+
+test('uninstall --platform only removes that platform, leaving other platforms in the manifest', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const opencodePath = path.join(root, '.opencode', 'agents', 'test-agent.md');
+    const claudePath = path.join(root, '.claude', 'agents', 'test-agent.md');
+    await mkdir(path.dirname(opencodePath), { recursive: true });
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await writeFile(opencodePath, 'opencode content');
+    await writeFile(claudePath, 'claude content');
+    const location = await writeTestManifest(root, home, [
+      { platform: 'opencode', kind: 'agent', name: 'test-agent', path: opencodePath, sourcePath: 'artifacts/test-agent/test-agent.md', checksum: sha256('opencode content'), forgeVersion: 'test' },
+      { platform: 'claude', kind: 'agent', name: 'test-agent', path: claudePath, sourcePath: 'artifacts/test-agent/test-agent.md', checksum: sha256('claude content'), forgeVersion: 'test' }
+    ]);
+
+    const output = await captureConsole(() => main(['uninstall', '--platform', 'opencode', '--scope', 'project', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    await assert.rejects(access(opencodePath));
+    assert.equal(await readFile(claudePath, 'utf8'), 'claude content');
+    const manifest = JSON.parse(await readFile(location.manifestPath, 'utf8')) as AssetManifest;
+    assert.equal(manifest.entries.length, 1);
+    assert.equal(manifest.entries[0].platform, 'claude');
+  });
+});
+
+test('uninstall --dry-run reports the plan without deleting files or the manifest', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const filePath = path.join(root, '.opencode', 'agents', 'test-agent.md');
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, 'installed content');
+    const location = await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'test-agent', path: filePath, sourcePath: 'artifacts/test-agent/test-agent.md', checksum: sha256('installed content'), forgeVersion: 'test' }]);
+    const before = await readFile(location.manifestPath, 'utf8');
+
+    const output = await captureConsole(() => main(['uninstall', '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /delete opencode agent test-agent/);
+    assert.equal(await readFile(filePath, 'utf8'), 'installed content');
+    assert.equal(await readFile(location.manifestPath, 'utf8'), before);
+  });
+});
+
+test('uninstall rejects --source', async () => {
+  const output = await captureConsole(() => main(['uninstall', '--source', '.'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /uninstall does not accept --source/);
+});
+
+test('--model and --model-map require an explicit single --platform', async () => {
+  const noPlatform = await captureConsole(() => main(['install', '--model', 'opus', '--yes'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(noPlatform.code, 1);
+  assert.match(noPlatform.stderr, /require an explicit single --platform/);
+
+  const allPlatform = await captureConsole(() => main(['install', '--platform', 'all', '--model', 'opus', '--yes'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(allPlatform.code, 1);
+  assert.match(allPlatform.stderr, /require an explicit single --platform/);
+});
+
+test('--model and --model-map are rejected outside install/update/configure', async () => {
+  const output = await captureConsole(() => main(['list', '--model', 'opus'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /--model and --model-map are only accepted for install, update, and configure/);
+});
+
+test('invalid --model-map value is rejected', async () => {
+  const output = await captureConsole(() => main(['install', '--platform', 'claude', '--model-map', 'not-a-pair'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /Invalid --model-map/);
+});
+
+test('install --model applies to every supporting artifact on the target platform and persists to model-preferences.json', async () => {
+  const root = process.cwd();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'user', '--model', 'haiku', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    const forgeContent = await readFile(path.join(home, '.claude', 'agents', 'forge.md'), 'utf8');
+    assert.match(forgeContent, /^model: haiku$/m);
+    const prefsPath = path.join(home, '.forge', 'state', 'user-model-preferences.json');
+    const prefs = JSON.parse(await readFile(prefsPath, 'utf8'));
+    assert.equal(prefs.claude.forge, 'haiku');
+    assert.equal(prefs.claude['using-forge'], 'haiku');
+  });
+});
+
+test('install --model-map applies only to the named artifacts', async () => {
+  const root = process.cwd();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'user', '--model-map', 'forge=haiku,forge-grill=sonnet', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    const forgeContent = await readFile(path.join(home, '.claude', 'agents', 'forge.md'), 'utf8');
+    assert.match(forgeContent, /^model: haiku$/m);
+    const grillContent = await readFile(path.join(home, '.claude', 'skills', 'forge-grill', 'SKILL.md'), 'utf8');
+    assert.match(grillContent, /^model: sonnet$/m);
+    const usingForgeContent = await readFile(path.join(home, '.claude', 'skills', 'using-forge', 'SKILL.md'), 'utf8');
+    assert.match(usingForgeContent, /^model: sonnet$/m); // untouched, keeps its canonical default
+  });
+});
+
+test('install --model-map rejects an unknown artifact name', async () => {
+  const root = process.cwd();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--model-map', 'bogus=haiku', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 1);
+    assert.match(output.stderr, /--model-map references unknown artifact "bogus"/);
+  });
+});
+
+test('configure rejects --force and --yes', async () => {
+  const output = await captureConsole(() => main(['configure', '--platform', 'claude', '--scope', 'user', '--model', 'opus', '--yes'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /configure does not accept --force or --yes/);
+});
+
+test('configure needs --scope non-interactively', async () => {
+  const home = await tempHome();
+  const output = await captureConsole(() => main(['configure', '--platform', 'claude', '--model', 'opus'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /configure needs --scope when not run interactively/);
+});
+
+test('configure reports nothing installed when the scope has no manifest', async () => {
+  const home = await tempHome();
+  const output = await captureConsole(() => main(['configure', '--scope', 'user', '--model', 'opus', '--platform', 'claude'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  assert.match(output.stdout, /Nothing installed for user scope/);
+});
+
+test('configure needs --model or --model-map non-interactively', async () => {
+  const root = process.cwd();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    assert.equal((await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'user', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }))).code, 0);
+    const output = await captureConsole(() => main(['configure', '--scope', 'user', '--platform', 'claude'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 1);
+    assert.match(output.stderr, /configure needs --model or --model-map when not run interactively/);
+  });
+});
+
+test('configure changes only the targeted artifact, updates the manifest, and survives a later plain update', async () => {
+  const root = process.cwd();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    assert.equal((await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'user', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }))).code, 0);
+
+    const configured = await captureConsole(() => main(['configure', '--scope', 'user', '--platform', 'claude', '--model-map', 'forge=haiku'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(configured.code, 0);
+    assert.match(configured.stdout, /Updated 6 file\(s\) with new model preferences/);
+    assert.match(await readFile(path.join(home, '.claude', 'agents', 'forge.md'), 'utf8'), /^model: haiku$/m);
+
+    // A later plain `update` must not silently reset the chosen model back to the canonical default.
+    const updated = await captureConsole(() => main(['update', '--source', root, '--platform', 'claude', '--scope', 'user'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(updated.code, 0);
+    assert.match(await readFile(path.join(home, '.claude', 'agents', 'forge.md'), 'utf8'), /^model: haiku$/m);
+  });
+});
+
+test('list triggers migration from ~/.forge-ai/ just like install/uninstall do', async () => {
+  const home = await tempHome();
+  const legacyManifestPath = path.join(home, '.forge-ai', 'user-manifest.json');
+  await mkdir(path.dirname(legacyManifestPath), { recursive: true });
+  await writeFile(legacyManifestPath, JSON.stringify({ schemaVersion: 1, scope: 'user', updatedAt: new Date(0).toISOString(), entries: [] }));
+
+  const output = await captureConsole(() => main(['list'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  await access(path.join(home, '.forge', 'state', 'user-manifest.json'));
+  await access(path.join(home, '.forge-ai', 'MIGRATED'));
+});
+
+test('list reports no installs when none exist', async () => {
+  const home = await tempHome();
+  const output = await captureConsole(() => main(['list'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 0);
+  assert.match(output.stdout, /No Forge installs recorded/);
+});
+
+test('list reports user and project installs with platform, version, and file count', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    assert.equal((await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'user'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }))).code, 0);
+    assert.equal((await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }))).code, 0);
+
+    const output = await captureConsole(() => main(['list'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    const canonicalRoot = await realpath(root);
+    assert.match(output.stdout, /^user: forge \S+, 2 file\(s\), platforms: claude, updated /m);
+    assert.match(output.stdout, new RegExp(`^project ${canonicalRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: forge \\S+, 2 file\\(s\\), platforms: opencode, updated `, 'm'));
+  });
+});
+
+test('list rejects flags', async () => {
+  const output = await captureConsole(() => main(['list', '--platform', 'claude'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /list does not accept any flags/);
+});
+
+test('warns when a legacy .forge-ai manifest was updated more recently than the current one', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    assert.equal((await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }))).code, 0);
+
+    const location = await resolveManifestLocation('project', root, home);
+    const current = JSON.parse(await readFile(location.manifestPath, 'utf8')) as AssetManifest;
+    const legacyPath = location.manifestPath.replace(path.join(home, '.forge', 'state'), path.join(home, '.forge-ai'));
+    await mkdir(path.dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, JSON.stringify({ ...current, updatedAt: new Date(Date.now() + 60_000).toISOString() }));
+
+    const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stderr, /An older Forge install at .* was updated more recently/);
+  });
+});
+
+test('list also warns about legacy state drift, not just install/update/uninstall', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    assert.equal((await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }))).code, 0);
+
+    const location = await resolveManifestLocation('project', root, home);
+    const current = JSON.parse(await readFile(location.manifestPath, 'utf8')) as AssetManifest;
+    const legacyPath = location.manifestPath.replace(path.join(home, '.forge', 'state'), path.join(home, '.forge-ai'));
+    await mkdir(path.dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, JSON.stringify({ ...current, updatedAt: new Date(Date.now() + 60_000).toISOString() }));
+
+    const output = await captureConsole(() => main(['list'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stderr, /An older Forge install at .* was updated more recently/);
+  });
+});
+
+test('configure also warns about legacy state drift', async () => {
+  const root = process.cwd();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    assert.equal((await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'user', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }))).code, 0);
+
+    const location = await resolveManifestLocation('user', root, home);
+    const current = JSON.parse(await readFile(location.manifestPath, 'utf8')) as AssetManifest;
+    const legacyPath = location.manifestPath.replace(path.join(home, '.forge', 'state'), path.join(home, '.forge-ai'));
+    await mkdir(path.dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, JSON.stringify({ ...current, updatedAt: new Date(Date.now() + 60_000).toISOString() }));
+
+    const output = await captureConsole(() => main(['configure', '--platform', 'claude', '--scope', 'user', '--model', 'haiku'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stderr, /An older Forge install at .* was updated more recently/);
+  });
+});
+
 test('validate rejects install-only flags', async () => {
   const root = await fixtureRoot();
   const output = await captureConsole(() => main(['validate', '--source', root, '--scope', 'project'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 1);
   assert.match(output.stderr, /validate only accepts --platform and --source/);
-});
-
-test('build-plugin writes plugin.json, skills/, and agents/ from the real bundled artifacts to --out', async () => {
-  const root = process.cwd();
-  const outDir = await tempDir('forge-plugin-');
-  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 0);
-  assert.match(output.stdout, /Wrote 7 file\(s\)/);
-  const pluginJson = JSON.parse(await readFile(path.join(outDir, '.claude-plugin', 'plugin.json'), 'utf8'));
-  assert.equal(pluginJson.name, 'forge');
-  await access(path.join(outDir, 'skills', 'forge', 'SKILL.md'));
-  await access(path.join(outDir, 'agents', 'forge-worker.md'));
-  await access(path.join(outDir, 'agents', 'forge-worker-leaf.md'));
-  await access(path.join(outDir, 'agents', 'forge-adversary.md'));
-  await access(path.join(outDir, 'skills', 'using-forge', 'SKILL.md'));
-  await access(path.join(outDir, 'skills', 'forge-grill', 'SKILL.md'));
-  await assert.rejects(access(path.join(outDir, 'agents', 'forge.md')));
-});
-
-test('build-plugin --dry-run reports the file list without writing anything to disk', async () => {
-  const root = process.cwd();
-  const outDir = await tempDir('forge-plugin-');
-  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir, '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 0);
-  assert.match(output.stdout, /would be written/);
-  assert.match(output.stdout, /skills\/forge\/SKILL\.md/);
-  await assert.rejects(access(path.join(outDir, '.claude-plugin')));
-});
-
-test('build-plugin refuses a non-empty --out that is not a prior plugin build, without --force', async () => {
-  const root = process.cwd();
-  const outDir = await tempDir('forge-plugin-');
-  await writeFile(path.join(outDir, 'unrelated.txt'), 'not a plugin dir');
-  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 1);
-  assert.match(output.stderr, /--force/);
-  await assert.rejects(access(path.join(outDir, '.claude-plugin')));
-});
-
-test('build-plugin succeeds with --force on a non-empty, non-plugin --out', async () => {
-  const root = process.cwd();
-  const outDir = await tempDir('forge-plugin-');
-  await writeFile(path.join(outDir, 'unrelated.txt'), 'not a plugin dir');
-  const output = await captureConsole(() => main(['build-plugin', '--source', root, '--out', outDir, '--force'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 0);
-  await access(path.join(outDir, '.claude-plugin', 'plugin.json'));
-});
-
-test('build-plugin rejects --platform', async () => {
-  const output = await captureConsole(() => main(['build-plugin', '--platform', 'claude'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 1);
-  assert.match(output.stderr, /build-plugin only accepts/);
-});
-
-test('build-plugin --target codex writes the standalone skills-only Codex plugin', async () => {
-  const outDir = await tempDir('forge-plugin-');
-  const output = await captureConsole(() => main(['build-plugin', '--target', 'codex', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 0);
-  assert.match(output.stdout, /Wrote 7 file\(s\)/);
-  await access(path.join(outDir, '.codex-plugin', 'plugin.json'));
-  await access(path.join(outDir, 'skills', 'forge', 'references', 'worker-leaf.md'));
-  await assert.rejects(access(path.join(outDir, '.claude-plugin')));
-  await assert.rejects(access(path.join(outDir, 'agents')));
-});
-
-test('build-plugin target guard refuses overwriting a plugin built for the other platform', async () => {
-  const outDir = await tempDir('forge-plugin-');
-  assert.equal((await captureConsole(() => main(['build-plugin', '--target', 'codex', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }))).code, 0);
-  const output = await captureConsole(() => main(['build-plugin', '--target', 'claude', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 1);
-  assert.match(output.stderr, /prior Forge claude plugin build/);
-});
-
-test('build-plugin target guard refuses a foreign same-target Codex manifest without --force', async () => {
-  const outDir = await tempDir('forge-plugin-');
-  await mkdir(path.join(outDir, '.codex-plugin'), { recursive: true });
-  await writeFile(path.join(outDir, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'unrelated-plugin', version: '1.0.0' }));
-  await writeFile(path.join(outDir, 'keep.txt'), 'foreign');
-  const output = await captureConsole(() => main(['build-plugin', '--target', 'codex', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 1);
-  assert.match(output.stderr, /must identify plugin "forge"/);
-  assert.equal(JSON.parse(await readFile(path.join(outDir, '.codex-plugin', 'plugin.json'), 'utf8')).name, 'unrelated-plugin');
-});
-
-test('build-plugin target guard refuses a foreign same-target Claude manifest without --force', async () => {
-  const outDir = await tempDir('forge-plugin-');
-  await mkdir(path.join(outDir, '.claude-plugin'), { recursive: true });
-  await writeFile(path.join(outDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'unrelated-plugin', version: '1.0.0' }));
-  const output = await captureConsole(() => main(['build-plugin', '--target', 'claude', '--source', process.cwd(), '--out', outDir], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 1);
-  assert.match(output.stderr, /must identify plugin "forge"/);
-  assert.equal(JSON.parse(await readFile(path.join(outDir, '.claude-plugin', 'plugin.json'), 'utf8')).name, 'unrelated-plugin');
-});
-
-test('build-plugin rejects invalid --target', async () => {
-  const output = await captureConsole(() => main(['build-plugin', '--target', 'other'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
-  assert.equal(output.code, 1);
-  assert.match(output.stderr, /Invalid --target/);
 });
 
 test('npm bin shim runs the built CLI', async () => {
@@ -611,7 +1045,7 @@ test('manifest checksum reflects on-disk content, not pre-write content', async 
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, 'on-disk-content');
   const location = await resolveManifestLocation('project', root, root);
-  const manifest = await buildManifest(location, [{ platform: 'opencode', kind: 'agent', name: 'demo', scope: 'project', path: target, sourcePath: 'artifacts/demo/demo.md', content: 'pre-write-content' }]);
+  const manifest = await buildManifest(location, [{ platform: 'opencode', kind: 'agent', name: 'demo', scope: 'project', path: target, sourcePath: 'artifacts/demo/demo.md', content: 'pre-write-content' }], 'test');
   assert.equal(manifest.entries[0].checksum, sha256('on-disk-content'));
   assert.notEqual(manifest.entries[0].checksum, sha256('pre-write-content'));
 });
@@ -634,16 +1068,24 @@ test('discovers and dry-runs all bundled Forge artifacts', async () => {
   assert.match(output.stdout, /\.opencode\/skills\/forge-grill\/SKILL\.md/);
 });
 
-test('bundled forge artifact installs as a Claude skill, not a subagent', async () => {
+test('bundled forge artifact installs as a real Claude subagent with a structural dispatch-only allowlist', async () => {
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
   assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
-  assert.match(output.stdout, /claude skill forge -> .*\.claude\/skills\/forge\/SKILL\.md/);
-  assert.doesNotMatch(output.stdout, /\.claude\/agents\/forge\.md/);
+  assert.match(output.stdout, /claude agent forge -> .*\.claude\/agents\/forge\.md/);
+  assert.doesNotMatch(output.stdout, /\.claude\/skills\/forge\/SKILL\.md/);
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
   assert.match(output.stdout, /claude agent forge-worker-leaf -> .*\.claude\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /claude agent forge-adversary -> .*\.claude\/agents\/forge-adversary\.md/);
+  assert.doesNotMatch(output.stdout, /CLAUDE_UNKNOWN_TOOL/);
+  assert.doesNotMatch(output.stdout, /CLAUDE_AGENT_TOOLS_IGNORED/);
+
+  const { artifacts } = await discoverArtifacts(root);
+  const forge = artifacts.find((item) => item.name === 'forge')!;
+  const rendered = renderClaudeAgent(forge);
+  assert.match(rendered.content, /tools: Agent\(forge-worker, forge-adversary\), TodoWrite, Skill, AskUserQuestion/);
+  assert.equal(rendered.diagnostics.length, 0);
 });
 
 test('bundled Forge direct Codex install includes all six canonical artifacts and diagnostics', async () => {
@@ -675,6 +1117,103 @@ test('bundled worker coordinator grants spawn tools; leaf denies them', async ()
   assert.doesNotMatch(leafGrok, /- task\n/);
   assert.match(coordinatorOpenCode, /task: allow/);
   assert.match(leafOpenCode, /task: deny/);
+});
+
+// Conformance suite (design.md §5.3 / feature-list.json f2-t3): asserts on RENDERED OUTPUT,
+// not just frontmatter, so it catches drift in what actually ships, not just what's declared.
+
+test('conformance: forge cannot execute directly on every platform that claims structural enforcement, and Grok stays a known, explicit gap', async () => {
+  const root = process.cwd();
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  const forgeClaude = plan.files.find((f) => f.platform === 'claude' && f.name === 'forge')?.content ?? '';
+  const forgeOpenCode = plan.files.find((f) => f.platform === 'opencode' && f.name === 'forge')?.content ?? '';
+  const forgeCodex = plan.files.find((f) => f.platform === 'codex' && f.name === 'forge')?.content ?? '';
+  const forgeGrok = plan.files.find((f) => f.platform === 'grok' && f.name === 'forge')?.content ?? '';
+
+  // Claude: structural tools allowlist, no direct file/shell tools. Scope the check to the
+  // frontmatter's `tools:` line, not the whole body — body prose legitimately says things like
+  // "Read .forge/lessons.md" in English, which isn't a tool grant.
+  const claudeToolsLine = forgeClaude.split('\n').find((line) => line.startsWith('tools:')) ?? '';
+  assert.match(claudeToolsLine, /^tools: Agent\(forge-worker, forge-adversary\), TodoWrite, Skill, AskUserQuestion$/);
+  for (const tool of ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep', 'LS', 'WebFetch']) {
+    assert.doesNotMatch(claudeToolsLine, new RegExp(`\\b${tool}\\b`), `forge (Claude) must not be granted ${tool}`);
+  }
+
+  // OpenCode: structural permission denies.
+  for (const tool of ['read', 'write', 'edit', 'bash', 'glob', 'grep', 'list', 'patch', 'webfetch']) {
+    assert.match(forgeOpenCode, new RegExp(`${tool}: deny`), `forge (OpenCode) must deny ${tool}`);
+  }
+
+  // Codex: explicit read-only sandbox.
+  assert.match(forgeCodex, /sandbox_mode = "read-only"/);
+
+  // Grok: KNOWN, DOCUMENTED gap — forge is still a skill here (advisory only), unlike the other
+  // three platforms. This test locks in the current, honestly-recorded state (design.md §8's open
+  // question) rather than silently passing a check that doesn't verify anything. If this ever
+  // flips (Grok gains a real primary-agent mechanism and forge converts), update this assertion
+  // alongside the decision record — don't let it drift silently in either direction.
+  assert.doesNotMatch(forgeGrok, /disallowedTools|tools:/);
+});
+
+test('conformance: every cross-referenced artifact name in every rendered body resolves to a real installed artifact, per platform', async () => {
+  const root = process.cwd();
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  const canonicalNames = new Set(['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary', 'using-forge', 'forge-grill']);
+  const namePattern = new RegExp(`\\b(${[...canonicalNames].join('|')})\\b`, 'g');
+
+  for (const platform of ['claude', 'opencode', 'codex', 'grok'] as const) {
+    const installedNames = new Set(plan.files.filter((f) => f.platform === platform).map((f) => f.name));
+    for (const file of plan.files.filter((f) => f.platform === platform)) {
+      const referenced = new Set([...file.content.matchAll(namePattern)].map((m) => m[1]));
+      for (const name of referenced) {
+        assert.ok(installedNames.has(name), `${platform} ${file.name} references "${name}", which is not installed on ${platform}`);
+      }
+    }
+  }
+});
+
+const GOLDEN_RENDERERS: Record<string, Record<string, (artifact: CanonicalArtifact) => { content: string }>> = {
+  claude: { agent: renderClaudeAgent, skill: renderClaudeSkill },
+  codex: { agent: renderCodexAgent, skill: renderCodexSkill },
+  grok: { agent: renderGrokAgent, skill: renderGrokSkill },
+  opencode: { agent: renderOpenCodeAgent, skill: renderOpenCodeSkill }
+};
+
+test('golden fixtures: rendered output per platform matches committed snapshots', async () => {
+  const root = process.cwd();
+  const { artifacts } = await discoverArtifacts(root);
+  for (const platform of ['claude', 'codex', 'grok', 'opencode'] as const) {
+    for (const artifact of artifacts) {
+      const effectiveKind = artifact[platform]?.kind ?? artifact.kind;
+      const composed: CanonicalArtifact = { ...artifact, body: composeBody(artifact.body, platform) };
+      const { content } = GOLDEN_RENDERERS[platform][effectiveKind](composed);
+      const fixturePath = path.join('tests', 'fixtures', platform, `${artifact.name}.golden`);
+      const expected = await readFile(fixturePath, 'utf8');
+      assert.equal(content, expected, `${platform}/${artifact.name} drifted from its golden fixture — review the change, then \`npm run generate-fixtures\``);
+    }
+  }
+});
+
+test('conformance: forge-worker names only its own platform\'s spawn tool, never another\'s', async () => {
+  const root = process.cwd();
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  const spawnToolByPlatform: Record<string, string> = { claude: 'Agent', grok: 'task', opencode: 'task' };
+  for (const [platform, tool] of Object.entries(spawnToolByPlatform)) {
+    const content = plan.files.find((f) => f.platform === platform && f.name === 'forge-worker')!.content;
+    assert.match(content, new RegExp(`Spawn \`forge-worker-leaf\` via \`${tool}\``));
+  }
+  const codexContent = plan.files.find((f) => f.platform === 'codex' && f.name === 'forge-worker')!.content;
+  assert.match(codexContent, /Return `DELEGATION_REQUESTS`/);
+  assert.doesNotMatch(codexContent, /Spawn `forge-worker-leaf` via `(Agent|task)`/);
+});
+
+test('no policy-class dispatch snippet diverges across platforms', () => {
+  const platforms = ['claude', 'codex', 'grok', 'opencode'] as const;
+  for (const [id, snippet] of Object.entries(DISPATCH_SNIPPETS)) {
+    if (snippet.class !== 'policy') continue;
+    const resolved = platforms.map((platform) => snippet.text[platform] ?? snippet.text.default);
+    assert.ok(resolved.every((text) => text === resolved[0]), `policy-class snippet "${id}" diverges across platforms without a recorded waiver`);
+  }
 });
 
 test('bundled forge artifact installs as a Grok skill, with worker and adversary as subagents', async () => {
@@ -881,7 +1420,7 @@ async function tempHome(): Promise<string> {
   return tempDir('forge-home-');
 }
 
-async function tempDir(prefix: 'forge-fixture-' | 'forge-home-' | 'forge-invalid-' | 'forge-plugin-'): Promise<string> {
+async function tempDir(prefix: 'forge-fixture-' | 'forge-home-' | 'forge-invalid-'): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
@@ -898,7 +1437,7 @@ function isTestTempDir(dir: string): boolean {
   const normalized = path.resolve(dir);
   const parent = path.dirname(normalized);
   const name = path.basename(normalized);
-  return parent === path.resolve(os.tmpdir()) && /^(forge-fixture-|forge-home-|forge-invalid-|forge-plugin-)/.test(name);
+  return parent === path.resolve(os.tmpdir()) && /^(forge-fixture-|forge-home-|forge-invalid-)/.test(name);
 }
 
 async function withCwd<T>(cwd: string, run: () => Promise<T>): Promise<T> {
@@ -914,10 +1453,11 @@ async function withCwd<T>(cwd: string, run: () => Promise<T>): Promise<T> {
 async function writeTestManifest(root: string, home: string, entries: AssetManifest['entries']) {
   const location = await resolveManifestLocation('project', root, home);
   await saveManifest(location.manifestPath, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     scope: 'project',
     projectPath: root,
     projectPathHash: location.projectPathHash,
+    forgeVersion: 'test',
     updatedAt: new Date(0).toISOString(),
     entries
   });

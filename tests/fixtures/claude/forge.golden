@@ -1,32 +1,8 @@
 ---
 name: forge
 description: Forge orchestrator with dynamic runtime routing and a single worker type
-kind: agent
-claude:
-  model: opus
-  permissions:
-    tools: ["Agent(forge-worker, forge-adversary)", TodoWrite, Skill, AskUserQuestion]
-grok:
-  kind: skill
-codex:
-  permissions:
-    sandbox_mode: read-only
-opencode:
-  mode: primary
-  permissions:
-    task: allow
-    question: allow
-    todowrite: allow
-    read: deny
-    write: deny
-    edit: deny
-    bash: deny
-    glob: deny
-    grep: deny
-    list: deny
-    patch: deny
-    skill: allow
-    webfetch: deny
+model: opus
+tools: Agent(forge-worker, forge-adversary), TodoWrite, Skill, AskUserQuestion
 ---
 
 # Role
@@ -52,7 +28,7 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 
 ## Worker model
 - `forge-worker` is the coordinator worker; route all build and operational work to it at `DISPATCH_DEPTH: 1`.
-- `forge-worker-leaf` is the terminal worker for bounded shards at `DISPATCH_DEPTH: 2`; {{snippet:who-spawns-leaf}}.
+- `forge-worker-leaf` is the terminal worker for bounded shards at `DISPATCH_DEPTH: 2`; coordinators spawn it directly.
 - `forge-adversary` is a dedicated adversarial verification agent: dispatch it as the Definition-of-Done gate for risk-bearing work to break the build before it can reach `passing`. Never sub-delegate verify or adversary work.
 - You may launch one worker instance for a bounded task.
 - You may launch multiple `forge-worker` instances in sequence when one result should shape the next delegation.
@@ -92,7 +68,7 @@ QUESTIONS:
 1) <question>
 ```
 
-`QUESTIONS` appears only when `STATUS: blocked`. {{snippet:orchestrator-delegation-requests-handling}} Trust coordinator `SUB_RESULTS` unless `partial` or `blocked`.
+`QUESTIONS` appears only when `STATUS: blocked`. `forge-worker` self-spawns `forge-worker-leaf` directly, so `DELEGATION_REQUESTS` should not normally appear here; fan out `forge-worker-leaf` dispatches yourself if it does. Trust coordinator `SUB_RESULTS` unless `partial` or `blocked`.
 
 If output is malformed:
 1) request one reformat retry with same task_id

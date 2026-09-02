@@ -94,13 +94,22 @@ The same operating model is shared across all supported agents so the workflow s
 
 ## Installation
 
-The primary installer is the npm CLI:
+Install with the npm CLI:
 
 ```sh
 npx @guidobuilds/forge-ai install
 ```
 
-The installer prompts for the target agent platform and whether Forge should be installed globally for your user or locally for the current project.
+The installer prompts for the target agent platform, whether Forge should be installed globally for your user or locally for the current project, and — interactively — which model each agent should use: keep each agent's recommended default, or choose per agent. For OpenCode, the per-agent prompt shows the models you actually have configured (via `opencode models`, falling back to free-text entry if that command isn't available), not a generic list.
+
+To choose models non-interactively (requires an explicit single `--platform` — model ids aren't portable across platforms):
+
+```sh
+npx @guidobuilds/forge-ai install --platform claude --scope user --model opus --yes
+npx @guidobuilds/forge-ai install --platform opencode --scope user --model-map forge=anthropic/claude-opus-4-1,forge-worker=anthropic/claude-sonnet-4-5 --yes
+```
+
+`--model` applies to every agent that supports a model on the target platform; `--model-map name=model,...` sets it per artifact. Choices persist across `update` — they are not silently reset back to the canonical default. To change a model later without a full reinstall, see [Configuring models](#configuring-models) below.
 
 To update an existing install:
 
@@ -126,52 +135,6 @@ Validate a local Forge source tree:
 npx @guidobuilds/forge-ai validate --source .
 ```
 
-### Claude Code plugin (alternative to the CLI installer)
-
-Claude Code users can also install Forge as a plugin, using Claude Code's built-in marketplace mechanism instead of (or alongside) the CLI installer above:
-
-```
-/plugin marketplace add guidobuilds/forge
-/plugin install forge@guidobuilds
-```
-
-Things to know before switching to this channel:
-
-- **Claude Code channel.** Codex also has its own plugin channel (below); OpenCode and Grok Build remain CLI-only.
-- **The entry point changes.** Plugin skills are always namespaced, so the orchestrator is invoked as `/forge:forge`, not the bare `/forge` used by a CLI-pushed install. Claude can still auto-load the `forge` skill from its description without you typing a slash command at all — this is Claude Code's general skill-invocation mechanism (skills are automatically discovered and can be invoked by Claude based on task context), not something specific to the plugin — a practical mitigation, but not a guaranteed substitute for the namespaced command.
-- **Auto-update is off by default.** Official Anthropic-managed marketplaces have auto-update enabled by default; third-party marketplaces like `guidobuilds` default to auto-update off, so you need to explicitly run `/plugin update forge@guidobuilds` (or toggle auto-update on for the `guidobuilds` marketplace) to pick up new releases.
-- **Same source, two channels.** The plugin package and the CLI-pushed files are both generated from the same canonical `artifacts/` source (via `forge-ai build-plugin`), so behavior is consistent — the plugin is not a fork of the CLI content.
-- **Not yet live:** `/plugin marketplace add guidobuilds/forge` requires this repo's generated `forge-plugin/` and `.claude-plugin/` directories to be committed and pushed first (see the release process in `CONTRIBUTING.md`). The marketplace/install mechanics were independently verified end-to-end against a real git-clone-based install, but not yet against a pushed `guidobuilds/forge` itself.
-
-### Codex plugin (alternative to the CLI installer)
-
-Codex can install Forge from this repository as a standalone, skills-only plugin:
-
-```sh
-codex plugin marketplace add guidobuilds/forge --ref main
-codex plugin add forge@guidobuilds-forge
-```
-
-Open a new Codex session after installation. The plugin exposes one public `forge` skill and keeps the worker, leaf, adversary, routing, and grill contracts as private references. Codex plugins cannot register `.codex/agents/*.toml`, so Forge spawns standard/default Codex sub-agents and injects the complete applicable contract. When sub-agent spawning is unavailable it uses a documented sequential inline fallback.
-
-This is independent from the direct CLI channel:
-
-```sh
-npx @guidobuilds/forge-ai install --platform codex --scope user
-npx @guidobuilds/forge-ai update --platform codex --scope user
-```
-
-Choose one channel when possible. Installing both does not overwrite the other channel's files, but it can expose duplicate Forge workflows. Update or remove Forge using the same channel used to install it.
-
-To refresh or uninstall the marketplace channel:
-
-```sh
-codex plugin marketplace upgrade guidobuilds-forge
-codex plugin remove forge@guidobuilds-forge
-# Optional after removing Forge:
-codex plugin marketplace remove guidobuilds-forge
-```
-
 ## How to Use
 
 Forge installs the **same operating model** on every agent, but **how you invoke it differs per platform**, because each agent exposes different primitives (skills, subagents, agent switching). The installer is only step one — this section is how you actually drive Forge once it is installed.
@@ -193,16 +156,22 @@ What changes per platform is the **kind** each piece is installed as, and theref
 
 | Piece | Installed as | How you invoke it |
 |---|---|---|
-| `forge` | skill (`model: opus`) | type `/forge` in the prompt — the only Forge skill you invoke directly |
+| `forge` | subagent (`model: opus`, structural `tools` allowlist) | mention it by name, `@forge`, or `claude --agent forge` |
 | `forge-grill` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before non-trivial or risk-bearing builds |
 | `using-forge` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before routing work |
-| `forge-worker` | subagent | coordinator; main thread delegates via `Agent` (or legacy `Task`) |
+| `forge-worker` | subagent | coordinator; `forge` delegates via `Agent(forge-worker, forge-adversary)` |
 | `forge-worker-leaf` | subagent | terminal shard; spawned by `forge-worker` (or orchestrator on Codex) |
 | `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
 
-Start a session by typing **`/forge`**. That loads the orchestrator role into your main Claude Code thread, which delegates each bounded task to `forge-worker`, which may spawn `forge-worker-leaf` for heavy inspect/build shards. Requires **Claude Code v2.1.172+** for nested sub-agents. `forge-grill` and `using-forge` are marked `user-invocable: false`: Claude still loads and runs them as part of `forge`'s routing, but they no longer appear in the `/` menu or run as standalone commands — `forge` is the single entry point.
+`forge` installs as a real Claude Code subagent with a structural `tools` allowlist (`Agent(forge-worker, forge-adversary)`, `TodoWrite`, `Skill`, `AskUserQuestion`) — it cannot Read/Write/Edit/Bash itself, only dispatch. It loads `using-forge` and `forge-grill` via the `Skill` tool and can still ask you clarifying questions directly (`AskUserQuestion` is retained for an agent running as the session's main driver, unlike a bounded sub-task dispatch). Requires **Claude Code v2.1.172+**.
 
-> Why a skill and not an agent on Claude? The main thread retains `Agent`/`Task` and can delegate. A skill injects orchestrator behavior without replacing the main agent. The trade-off: "delegate, never do worker work inline" is followed by instruction at the orchestrator layer, not by tool restrictions — but `forge-worker` **can** structurally spawn leaves when given `Agent` in its tool list.
+To make `forge` the automatic default for a project (equivalent to the old `/forge` auto-load), add to `.claude/settings.json`:
+
+```json
+{ "agent": "forge" }
+```
+
+Without that, invoke it explicitly per session (mention it by name, `@forge`, or `claude --agent forge`). `forge-ai install`/`update`/`uninstall` manage `forge`'s own file; they do not write `settings.json` for you.
 
 ### OpenCode
 
@@ -223,7 +192,7 @@ Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator h
 | `forge`, `forge-worker`, `forge-worker-leaf`, `forge-adversary` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
 | `using-forge`, `forge-grill` | skills | `~/.agents/skills/` (or `.agents/skills/` per project) |
 
-The direct CLI channel writes agent `.toml` files but does not generate `AGENTS.md` or profiles. The plugin channel instead uses one skill plus injected private role contracts, so it needs no separate agent installation.
+The CLI writes agent `.toml` files but does not generate `AGENTS.md` or profiles.
 
 ### Project vs user scope
 
@@ -303,15 +272,33 @@ npx @guidobuilds/forge-ai@latest update
 
 Forge replaces its managed agent and skill definitions in your supported agent configuration directories.
 
-Forge records installed files in manifests under `~/.forge-ai/` so updates can safely remove files that are no longer bundled. `update` prunes stale managed files by default only when the current file still matches the recorded checksum; use `--no-prune` to keep stale managed files. `--dry-run` previews writes and deletes without changing files or manifests.
+Forge records installed files in manifests under `~/.forge/state/` (migrated automatically and transparently from the earlier `~/.forge-ai/` on first run — the old directory is left in place, marked with a `MIGRATED` note, and never deleted automatically) so updates can safely remove files that are no longer bundled. `update` prunes stale managed files by default only when the current file still matches the recorded checksum; use `--no-prune` to keep stale managed files. `--dry-run` previews writes and deletes without changing files or manifests.
 
-Forge now routes a single canonical artifact to the right artifact kind per agent: the orchestrator installs as a Claude Code skill (`/forge`) but as an agent on OpenCode and Codex. If you installed an earlier version, run `update` (not `install`) so Forge prunes the now-stale `forge` agent and standalone `forge-worker` skill left by the previous layout.
+Forge routes a single canonical artifact to the right artifact kind per agent: the orchestrator installs as a real subagent on Claude Code, OpenCode, and Codex, and as a skill on Grok. If you installed an earlier version where Claude's orchestrator was a skill, run `update` (not `install`) so Forge prunes the now-stale `~/.claude/skills/forge/SKILL.md` left by the previous layout.
 
 ## Uninstalling
 
-Remove Forge from the agent configuration directories for OpenCode, Codex, or Claude Code by deleting the installed Forge agent and skill entries.
+```sh
+npx @guidobuilds/forge-ai uninstall
+```
 
-If you installed Forge for multiple tools, repeat the removal for each one you no longer want to use.
+This removes exactly the files Forge's manifest recorded for the given `--scope` (default: `user`), refusing to silently delete anything you edited locally — a locally-modified file is backed up and requires `--yes`/`--force` (or interactive confirmation) before it's removed, mirroring `update`'s overwrite protection. Pass `--platform` to uninstall a single agent instead of all of them, and `--dry-run` to preview what would be removed.
+
+## Listing installs
+
+```sh
+npx @guidobuilds/forge-ai list
+```
+
+Prints every recorded install — the user-scope one, if any, plus one line per project you've installed Forge into — with the Forge version, file count, platforms, and last-updated time for each.
+
+## Configuring models
+
+```sh
+npx @guidobuilds/forge-ai configure --platform claude --scope user
+```
+
+Change which model an already-installed agent uses without a full reinstall. Interactively, it walks every agent on the given scope/platform that supports a model (using OpenCode's live `opencode models` output where applicable, same as `install`). Non-interactively, pass `--model <id>` or `--model-map name=model,...` (same rules as `install`: an explicit single `--platform`, no `--force`/`--yes` — the point of the command is to make a choice, not skip one). Only the affected files are rewritten; the manifest and every other installed platform are left untouched.
 
 ## Project Status
 

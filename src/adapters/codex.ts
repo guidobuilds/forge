@@ -2,13 +2,19 @@ import { stringifyYaml } from '../frontmatter.js';
 import type { CanonicalArtifact, Diagnostic } from '../model.js';
 import { diagnostic } from '../diagnostics.js';
 import { isRecord, tomlString } from './shared.js';
+import { isKnownCodexModel } from './codex-known.js';
 
 const safeSandboxModes = new Set(['read-only', 'workspace-write']);
 
 export function renderCodexAgent(artifact: CanonicalArtifact): { content: string; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [diagnostic('info', 'CODEX_PARTIAL_AGENT_SUPPORT', `Codex agent output is partial and does not generate AGENTS.md or profiles for ${artifact.name}`, { platform: 'codex' })];
   const lines = [`name = ${tomlString(artifact.name)}`, `description = ${tomlString(artifact.description)}`, `developer_instructions = ${tomlString(artifact.body)}`];
-  if (artifact.codex?.model) lines.push(`model = ${tomlString(artifact.codex.model)}`);
+  if (artifact.codex?.model) {
+    lines.push(`model = ${tomlString(artifact.codex.model)}`);
+    if (!isKnownCodexModel(artifact.codex.model)) {
+      diagnostics.push(diagnostic('warning', 'CODEX_UNKNOWN_MODEL', `Unknown Codex model "${artifact.codex.model}" for ${artifact.name}`, { platform: 'codex' }));
+    }
+  }
   const permissions = artifact.codex?.permissions;
   if (isRecord(permissions) && typeof permissions.sandbox_mode === 'string') {
     if (safeSandboxModes.has(permissions.sandbox_mode)) lines.push(`sandbox_mode = ${tomlString(permissions.sandbox_mode)}`);

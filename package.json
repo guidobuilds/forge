@@ -1,6 +1,6 @@
 {
   "name": "@guidobuilds/forge-ai",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Forge AI framework",
   "license": "MIT",
   "type": "module",
@@ -21,9 +21,8 @@
     "build:test": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:test && node --test dist/tests/*.test.js",
-    "prepack": "npm run build",
-    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
-    "pretest": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
+    "generate-fixtures": "npm run build && node scripts/generate-fixtures.mjs",
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=20"

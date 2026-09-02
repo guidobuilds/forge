@@ -1,31 +1,19 @@
 ---
-name: forge-worker
 description: Forge universal worker for inspect, design, plan, build, operate, and verify work
-kind: agent
-claude:
-  permissions:
-    tools: [TodoWrite, Read, Write, Edit, Bash, Glob, Grep, LS, MultiEdit, WebFetch, Agent]
-grok:
-  permissions:
-    tools: [todo_write, read_file, search_replace, run_terminal_cmd, grep_search, list_dir, web_fetch, task, get_task_output, kill_task]
-codex:
-  permissions:
-    sandbox_mode: workspace-write
-opencode:
-  mode: subagent
-  permissions:
-    task: allow
-    todowrite: allow
-    read: allow
-    write: allow
-    edit: allow
-    bash: allow
-    glob: allow
-    grep: allow
-    list: allow
-    patch: allow
-    skill: allow
-    webfetch: allow
+mode: subagent
+permission:
+  task: allow
+  todowrite: allow
+  read: allow
+  write: allow
+  edit: allow
+  bash: allow
+  glob: allow
+  grep: allow
+  list: allow
+  patch: allow
+  skill: allow
+  webfetch: allow
 ---
 
 # Forge Worker
@@ -157,7 +145,7 @@ Spawn `forge-worker-leaf` when `DELEGATION: required`, or when **any** trigger f
 ### Spawn protocol
 
 1. Decompose into bounded leaf subgoals with disjoint `files_hint` paths.
-2. {{snippet:worker-spawn-leaf-instruction}}
+2. Spawn `forge-worker-leaf` via `task`, passing `DISPATCH_DEPTH: 2`, `WORKER_ROLE: leaf`, `TASK_ID`, subgoal, constraints, and `files_hint`. Omit `DELEGATION_REQUESTS`.
 3. Prefer **parallel** leaves for read-only `inspect`; prefer **sequential** leaves for `build` writes unless files are strictly disjoint.
 4. Synthesize: write durable detail to `.forge/<slug>/explore.md` or `build-log.md`; return ≤ 8 `SUMMARY` bullets plus compact `SUB_RESULTS`. Do not paste full child logs.
 

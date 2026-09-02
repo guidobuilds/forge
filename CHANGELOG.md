@@ -9,6 +9,48 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+### Changed
+
+- **`forge` installs as a real Claude Code subagent, not a skill.** Claude subagents can now spawn subagents up to depth 5 (v2.1.172+), so the historical blocker for a Claude-side orchestrator is gone. `forge` now has a structural `tools` allowlist (`Agent(forge-worker, forge-adversary)`, `TodoWrite`, `Skill`, `AskUserQuestion`) instead of being a fully advisory skill — it cannot Read/Write/Edit/Bash itself. It still keeps `AskUserQuestion` (confirmed: that tool is only stripped from bounded sub-task dispatches, not from an agent running as the session's main driver) and still loads `using-forge`/`forge-grill` via the `Skill` tool. To make it the automatic default for a project, add `{ "agent": "forge" }` to `.claude/settings.json` yourself — the installer does not write this for you (see README).
+- **Codex agents declare an explicit `sandbox_mode`** — `read-only` for `forge` (it only dispatches), `workspace-write` for `forge-worker`/`forge-worker-leaf`/`forge-adversary` (they write files). Previously unset on all four.
+- Grok and OpenCode installs now warn (`GROK_SKILL_DISCOVERABLE_UNENFORCED` / `OPENCODE_SKILL_DISCOVERABLE_UNENFORCED`) when installing a background-only skill (`using-forge`, `forge-grill`) that Claude can hide from direct invocation but Grok/OpenCode cannot — previously silent.
+- **Per-user install state moved from `~/.forge-ai/` to `~/.forge/state/`.** Migrated automatically and transparently on first use of any command that touches it (`install`, `update`, `uninstall`, `list`) — the old directory is copied, never moved, and left in place with a `MIGRATED` note; nothing is deleted automatically. Nesting under `state/` means this can never collide with a project's own `.forge/<feature-slug>/` ledger, even in a repo where `$HOME` itself has been used as a Forge project.
+- **The manifest now records the installed Forge version** (`forgeVersion`, both per-entry and per-manifest) and **merges across separate single-`--platform` runs instead of replacing** — `install --platform claude` followed by `install --platform opencode` no longer causes the first platform's files to reclassify as untracked/foreign. Existing `schemaVersion: 1` manifests are upgraded transparently on read (`forgeVersion: "unknown"`).
+- Install/update/uninstall now warn if a legacy `~/.forge-ai/` manifest was updated more recently than the current `~/.forge/state/` one — a sign a cached old CLI is still writing to the old location.
+- **Per-harness dispatch vocabulary in canonical artifact bodies is now composed per platform instead of hardcoded.** `forge-worker.md`, `forge.md`, and `using-forge.md` no longer spell out "via `Agent` (Claude), `task` (Grok), or `task` (OpenCode)" or a standalone "Codex fallback" section inline — a `{{snippet:id}}` reference is resolved per target platform at render time (`src/compose.ts`, `src/dispatch-snippets.ts`), failing loudly at build time if a platform has no text for a referenced snippet. This is a genuine prose change on Claude/Grok/OpenCode/Codex installs, not a no-op refactor — installed agent bodies now read slightly differently (equivalent meaning, phrased per platform instead of listing all four in one sentence). `BODY_OVER_BUDGET` is now measured on the composed, per-platform body rather than the shared canonical source.
+
+### Added
+
+- **`forge-ai list`** — prints every recorded install (the user-scope one, if any, plus one line per project) with Forge version, file count, platforms, and last-updated time. Answers "where is Forge installed and with what," which previously required manually reading manifest JSON files.
+- `tests/fixtures/<platform>/<name>.golden` — committed golden-render snapshots (6 artifacts × 4 platforms) guarding against unintended drift in installed prose. Regenerate with `npm run generate-fixtures` after reviewing the diff.
+- **Model selection.** `install`/`update` now offer an interactive model-selection step (per artifact × platform, gated on which platforms actually support a model — 3 of 4 silently drop it on skills) and accept `--model <id>` / `--model-map name=model,...` for non-interactive use (both require an explicit single `--platform`, since model ids are not portable across platforms). Choices persist in `model-preferences.json` next to the manifest and survive later `update` runs instead of silently resetting to the canonical default.
+- **`forge-ai configure`** — change an already-installed agent's model without a full reinstall. Interactive by default; non-interactive via `--model`/`--model-map`. Rewrites only the affected files.
+- **OpenCode model discovery.** The per-agent model prompt (`install` and `configure`) shells out to `opencode models` (falling back to `opencode2 models` on v2) to offer exactly the models the user has real, credential-backed access to, instead of a generic list — OpenCode has no fixed model enum and its config file is not a reliable source of truth (env-var- and credential-connected providers appear in neither). Falls back to free-text entry if neither binary is available, or if a v2 install predates the `models` command (added to `opencode2` on 2026-08-06). `OPENCODE_UNKNOWN_MODEL` / `CODEX_UNKNOWN_MODEL` warnings added, matching the existing Claude/Grok pattern (OpenCode/Codex previously had no model validation at all).
+- **OpenCode user-scope install now targets both v1 and v2, whichever actually exist.** v1 (`~/.config/opencode/`) and the v2 preview (`~/.opencode/`) read agents/skills from different directories — confirmed via `opencode2 debug config`, which doesn't list `~/.config/opencode` as a source at all. Installing only ever wrote v1's path, so a v2-only setup (no `opencode` v1 binary ever run) got files on disk that OpenCode itself would never read — `forge` silently missing from the agent list with no error. `install`/`update` now write to each generation's directory only if it already exists (`OPENCODE_USER_ROOT_NOT_FOUND` info diagnostic, defaulting to v1, if neither does yet); both get written if both exist. Project scope is unaffected — v1 and v2 already share `.opencode/` there.
+
+## [0.8.0] - 2026-09-02
+
+### Removed
+
+- **Claude Code and Codex plugin marketplace distribution channels** (`forge-plugin/`, `plugins/forge/`, `.claude-plugin/`, `.agents/plugins/marketplace.json`, `src/adapters/claude-plugin.ts`, `src/adapters/codex-plugin.ts`, `src/build-plugin.ts`, the `forge-ai build-plugin` command, the plugin drift guard (`.githooks/`, `scripts/check-plugin-sync.mjs`, `scripts/verify-drift-guard.sh`), and 16 plugin-specific tests). The npm CLI (`npx @guidobuilds/forge-ai install`) is now the single supported distribution and install method for all four platforms, including Claude Code and Codex — both of which previously also had an alternative plugin-marketplace install path shipped in 0.7.0.
+- `PluginFile` type and `writePluginFiles` (`src/model.ts`, `src/writer.ts`).
+- Public export `export * from './adapters/codex-plugin.js'` from `src/index.ts` — anyone importing `@guidobuilds/forge-ai` programmatically for Codex plugin generation loses that entry point.
+- `prepare`/`pretest` npm scripts, which existed solely to wire the now-removed pre-commit drift guard.
+
+### Added
+
+- **`forge-ai uninstall`** — the CLI's only removal path was previously "delete the files by hand"; now a manifest-driven uninstall mirrors `update`'s overwrite protection (a locally-edited file is backed up and requires `--yes`/`--force` or interactive confirmation before removal). Supports `--platform` to uninstall a single agent and `--dry-run` to preview.
+
+### Fixed
+
+- README no longer claims the Claude Code plugin channel is "Not yet live" (it had been live since 0.7.0; the line was never updated).
+
+### Migration from 0.7.x
+
+- If you installed Forge via `/plugin install forge@guidobuilds` (Claude Code) or `codex plugin add forge@guidobuilds-forge` (Codex), those marketplace sources no longer exist in this repository. Remove the plugin (`/plugin uninstall forge@guidobuilds` or `codex plugin remove forge@guidobuilds-forge`, then remove the marketplace) and install via the CLI instead: `npx @guidobuilds/forge-ai install --platform claude` or `--platform codex`.
+- If you only ever used the CLI (`npx @guidobuilds/forge-ai install/update`), nothing changes for you.
+- Programmatic consumers importing Codex plugin generation from `@guidobuilds/forge-ai`'s package export must vendor that logic themselves; it is no longer part of this package.
+
 ## [0.7.0] - 2026-08-06
 
 ### Added

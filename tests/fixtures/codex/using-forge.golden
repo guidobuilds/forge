@@ -1,11 +1,6 @@
 ---
 name: using-forge
 description: Route work through the lightest safe Forge workflow using dynamic runtime routing.
-kind: skill
-claude:
-  model: sonnet
-  when_to_use: Background operating model for the forge orchestrator — routing rules, state model, and approval heuristics. Loaded automatically before dispatching work; not meant to be invoked directly.
-  user-invocable: false
 ---
 
 # Using Forge Skill
@@ -87,7 +82,7 @@ Forge uses **two levels below the orchestrator** (`DISPATCH_DEPTH` 0 → 1 → 2
 
 ### Coordinator triggers
 
-`forge-worker` **must** {{snippet:worker-must-spawn-or-delegate}} when any: ≥ 8 file reads, ≥ 6 searches, ≥ 20 tool calls, ≥ 5 files to edit, `DELEGATION: required`, or plan implies ≥ 3 shards. **Never** sub-delegate `verify` or adversary work.
+`forge-worker` **must** return `DELEGATION_REQUESTS` when any: ≥ 8 file reads, ≥ 6 searches, ≥ 20 tool calls, ≥ 5 files to edit, `DELEGATION: required`, or plan implies ≥ 3 shards. **Never** sub-delegate `verify` or adversary work.
 
 ### Orchestrator dispatch hints
 
@@ -100,7 +95,7 @@ TASK_ID: <unique>
 
 - Unfamiliar-repo `inspect` → `DELEGATION: allowed`
 - Narrow bugfix → `DELEGATION: forbidden`
-{{snippet:codex-orchestrator-dispatch-hint}}
+- Codex: parse `DELEGATION_REQUESTS` and fan out `forge-worker-leaf` yourself
 
 ## Routing rules
 
