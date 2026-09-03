@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ManifestLocation } from './manifest.js';
+import { writeFileAtomic, type ManifestLocation } from './manifest.js';
 import type { Platform } from './model.js';
 
 // Keyed platform -> canonical artifact name -> model id. A flat `Record<name, model>` cannot
@@ -18,17 +18,27 @@ export function modelPreferencesPath(location: ManifestLocation): string {
 }
 
 export async function loadModelPreferences(prefsPath: string): Promise<ModelPreferences> {
+  let raw: unknown;
   try {
-    return JSON.parse(await readFile(prefsPath, 'utf8')) as ModelPreferences;
+    raw = JSON.parse(await readFile(prefsPath, 'utf8'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    if (error instanceof SyntaxError) {
+      console.error(`state file corrupt at ${prefsPath}; re-run \`forge-ai install\` to regenerate it.`);
+      return {};
+    }
     throw error;
   }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    console.error(`state file corrupt at ${prefsPath}; re-run \`forge-ai install\` to regenerate it.`);
+    return {};
+  }
+  return raw as ModelPreferences;
 }
 
 export async function saveModelPreferences(prefsPath: string, prefs: ModelPreferences): Promise<void> {
   await mkdir(path.dirname(prefsPath), { recursive: true });
-  await writeFile(prefsPath, `${JSON.stringify(prefs, null, 2)}\n`, 'utf8');
+  await writeFileAtomic(prefsPath, `${JSON.stringify(prefs, null, 2)}\n`);
 }
 
 export function setModelPreference(prefs: ModelPreferences, platform: Platform, name: string, model: string): ModelPreferences {

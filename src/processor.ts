@@ -214,12 +214,15 @@ async function pathExists(target: string): Promise<boolean> {
 async function classifyDestinations(files: OutputFile[], manifest: AssetManifest | undefined, backupRoot: string | undefined, anchor: string, pending: PendingDecisions): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
   for (const file of files) {
-    const status = await classifyFile(file.path, manifest);
+    const { status, checksum } = await classifyFile(file.path, manifest);
     file.status = status;
-    if (status === 'managed-modified' && backupRoot) {
-      file.backupPath = resolveBackupPath(backupRoot, file.path, anchor);
-      pending.modifiedOverwrites.push(file);
-      diagnostics.push(diagnostic('warning', 'MANAGED_FILE_OVERWRITE', `Will overwrite locally edited Forge file ${file.path}; backup → ${file.backupPath}`, { platform: file.platform }));
+    if (status === 'managed-modified') {
+      file.expectedChecksum = checksum;
+      if (backupRoot) {
+        file.backupPath = resolveBackupPath(backupRoot, file.path, anchor);
+        pending.modifiedOverwrites.push(file);
+        diagnostics.push(diagnostic('warning', 'MANAGED_FILE_OVERWRITE', `Will overwrite locally edited Forge file ${file.path}; backup → ${file.backupPath}`, { platform: file.platform }));
+      }
     } else if (status === 'foreign') {
       pending.foreignOverwrites.push(file);
       diagnostics.push(diagnostic('warning', 'FOREIGN_FILE_OVERWRITE', `Will overwrite untracked file at ${file.path}`, { platform: file.platform }));
@@ -228,14 +231,15 @@ async function classifyDestinations(files: OutputFile[], manifest: AssetManifest
   return diagnostics;
 }
 
-async function classifyFile(filePath: string, manifest: AssetManifest | undefined): Promise<FileStatus> {
+async function classifyFile(filePath: string, manifest: AssetManifest | undefined): Promise<{ status: FileStatus; checksum?: string }> {
   try {
     await access(filePath, constants.F_OK);
   } catch {
-    return 'new';
+    return { status: 'new' };
   }
   const entry = lookupEntryByPath(manifest, filePath);
-  if (!entry) return 'foreign';
+  if (!entry) return { status: 'foreign' };
   const content = await readFile(filePath, 'utf8');
-  return sha256(content) === entry.checksum ? 'managed-unmodified' : 'managed-modified';
+  const checksum = sha256(content);
+  return checksum === entry.checksum ? { status: 'managed-unmodified' } : { status: 'managed-modified', checksum };
 }

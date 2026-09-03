@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { resolveExecutable } from './executable-resolution.js';
 
 // `opencode models` prints exactly the models this user can actually pick — filtered to whichever
 // providers have credentials (env var, stored auth, or a config/plugin-declared provider), not the
@@ -20,8 +21,10 @@ import { spawnSync } from 'node:child_process';
 export type ModelDiscoveryRunner = (command: string, args: string[], options: { cwd: string; timeoutMs: number }) => { status: number | null; stdout: string };
 
 const defaultRunner: ModelDiscoveryRunner = (command, args, options) => {
+  const resolved = resolveExecutable(command, { cwd: options.cwd });
+  if (!resolved) return { status: null, stdout: '' };
   try {
-    const result = spawnSync(command, args, { cwd: options.cwd, timeout: options.timeoutMs, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const result = spawnSync(resolved, args, { timeout: options.timeoutMs, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     return { status: result.error ? null : result.status, stdout: result.stdout ?? '' };
   } catch {
     return { status: null, stdout: '' };

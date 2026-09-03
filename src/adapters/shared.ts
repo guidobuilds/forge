@@ -18,3 +18,16 @@ export function patternList(value: unknown): string[] | undefined {
 export function tomlString(value: string): string {
   return JSON.stringify(value);
 }
+
+const OPENCODE_PERMISSION_VALUES = new Set(['allow', 'deny', 'ask']);
+const OPENCODE_PERMISSIONS_MAX_KEYS = 64;
+
+export function isOpenCodePermissions(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length === 0 || keys.length > OPENCODE_PERMISSIONS_MAX_KEYS) return false;
+  return keys.every((key) => {
+    const v = (value as Record<string, unknown>)[key];
+    return v === true || v === false || (typeof v === 'string' && OPENCODE_PERMISSION_VALUES.has(v));
+  });
+}

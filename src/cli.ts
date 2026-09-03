@@ -13,9 +13,10 @@ import { formatDiagnostic, hasErrors } from './diagnostics.js';
 import { buildManifest, classifyPruneEntries, detectLegacyStateDrift, listInstalls, loadManifest, pruneEntries, resolveBackupPath, resolveBackupRoot, resolveManifestLocation, saveManifest, stateRoot, staleEntries, type InstallSummary, type ManifestEntry, type PrunePlanItem } from './manifest.js';
 import { getModelPreference, loadModelPreferences, modelPreferencesPath, saveModelPreferences, setModelPreference, type ModelPreferences } from './model-preferences.js';
 import { discoverOpenCodeModels } from './opencode-discovery.js';
+import { allowedInstallRoots } from './paths.js';
 import { supportsModel } from './platform-capabilities.js';
 import { buildWritePlan, discoverArtifacts, parsePlatform, parseScope, resolvePlatforms } from './processor.js';
-import { runSelfUpdate } from './self-update.js';
+import { isValidVersionSpec, normalizeVersionSpec, runSelfUpdate } from './self-update.js';
 import { checkLatestVersion, formatVersionNotice } from './version-check.js';
 import { writeOutputs } from './writer.js';
 import { hasPendingDecisions, type CanonicalArtifact, type Diagnostic, type OutputFile, type Platform, type PlatformArg, type Scope, type WritePlan } from './model.js';
@@ -49,9 +50,10 @@ type PrunePlan = {
   deletable: PrunePlanItem[];
   modifiedWithConsent: PrunePlanItem[];
   skippedMissing: PrunePlanItem[];
+  skippedUnsafe: PrunePlanItem[];
 };
 
-const emptyPrunePlan: PrunePlan = { deletable: [], modifiedWithConsent: [], skippedMissing: [] };
+const emptyPrunePlan: PrunePlan = { deletable: [], modifiedWithConsent: [], skippedMissing: [], skippedUnsafe: [] };
 
 export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}): Promise<number> {
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
@@ -162,8 +164,10 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
     });
 
     let prunePlan: PrunePlan = emptyPrunePlan;
+    let pruneRoots: string[] = [];
     if (install && command === 'update' && options.prune) {
-      prunePlan = await classifyPrune(oldManifest, plan.files, backupRoot!, options.scope, cwd, home);
+      pruneRoots = allowedInstallRoots(options.scope, home, cwd, oldManifest?.projectPath);
+      prunePlan = await classifyPrune(oldManifest, plan.files, backupRoot!, options.scope, cwd, home, pruneRoots);
     }
 
     const needsConfirm = install && !options.force && (hasPendingDecisions(plan.pending) || prunePlan.modifiedWithConsent.length > 0);
@@ -195,7 +199,7 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
         spinner.start(options.force ? 'Updating Forge files' : 'Installing Forge files');
         try {
           await writeOutputs(plan.files);
-          if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent]);
+          if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent], pruneRoots);
           await saveManifest(manifestLocation!.manifestPath, await buildManifest(manifestLocation!, plan.files, readPackageVersion(), now, oldManifest));
           spinner.stop(`Wrote ${plan.files.length} file(s).`);
         } catch (error) {
@@ -204,7 +208,7 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
         }
       } else {
         await writeOutputs(plan.files);
-        if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent]);
+        if (command === 'update' && options.prune) await pruneEntries([...prunePlan.deletable, ...prunePlan.modifiedWithConsent], pruneRoots);
         await saveManifest(manifestLocation!.manifestPath, await buildManifest(manifestLocation!, plan.files, readPackageVersion(), now, oldManifest));
         console.log(`Wrote ${plan.files.length} file(s).`);
         const totalDeleted = prunePlan.deletable.length + prunePlan.modifiedWithConsent.length;
@@ -240,7 +244,8 @@ function parseArgs(argv: string[]): { options: CliOptions } | { error: string } 
     else if (arg === '--to') {
       const value = argv[++index];
       if (!value) return { error: 'Missing --to value' };
-      options.targetVersion = value;
+      if (!isValidVersionSpec(value)) return { error: `Invalid --to ${value}; expected a semver or "latest"` };
+      options.targetVersion = normalizeVersionSpec(value);
     } else if (arg === '--platform') {
       const value = argv[++index];
       const platform = value ? parsePlatform(value) : undefined;
@@ -288,17 +293,19 @@ function parseArgs(argv: string[]): { options: CliOptions } | { error: string } 
   return { options };
 }
 
-async function classifyPrune(oldManifest: Awaited<ReturnType<typeof loadManifest>>, files: OutputFile[], backupRoot: string, scope: Scope, cwd: string, home: string): Promise<PrunePlan> {
+async function classifyPrune(oldManifest: Awaited<ReturnType<typeof loadManifest>>, files: OutputFile[], backupRoot: string, scope: Scope, cwd: string, home: string, roots: string[]): Promise<PrunePlan> {
   const stale = staleEntries(oldManifest, files);
-  const classified = await classifyPruneEntries(stale);
+  const classified = await classifyPruneEntries(stale, roots);
   const anchor = scope === 'user' ? home : cwd;
   const modifiedWithConsent: PrunePlanItem[] = [];
   const skippedMissing: PrunePlanItem[] = [];
+  const skippedUnsafe: PrunePlanItem[] = [];
   for (const item of classified.skipped) {
     if (item.reason === 'checksum-mismatch') modifiedWithConsent.push({ ...item, backupPath: resolveBackupPath(backupRoot, item.path, anchor) });
+    else if (item.reason === 'unsafe-path') skippedUnsafe.push(item);
     else skippedMissing.push(item);
   }
-  return { deletable: classified.deletable, modifiedWithConsent, skippedMissing };
+  return { deletable: classified.deletable, modifiedWithConsent, skippedMissing, skippedUnsafe };
 }
 
 async function promptForMissingInstallOptions(options: CliOptions, promptIO: PromptIO, cwd: string, home: string): Promise<boolean> {
@@ -518,16 +525,18 @@ async function runUninstall(options: CliOptions, promptIO: PromptIO): Promise<nu
 
   const backupRoot = resolveBackupRoot(manifestLocation, now);
   const anchor = options.scope === 'user' ? home : cwd;
-  const classified = await classifyPruneEntries(targeted);
+  const roots = allowedInstallRoots(options.scope, home, cwd, manifest.projectPath);
+  const classified = await classifyPruneEntries(targeted, roots);
   const modifiedWithConsent: PrunePlanItem[] = classified.skipped
     .filter((item) => item.reason === 'checksum-mismatch')
     .map((item) => ({ ...item, backupPath: resolveBackupPath(backupRoot, item.path, anchor) }));
   const skippedMissing = classified.skipped.filter((item) => item.reason === 'missing');
+  const skippedUnsafe = classified.skipped.filter((item) => item.reason === 'unsafe-path');
 
   const needsConfirm = !options.force && modifiedWithConsent.length > 0;
   if (!options.dryRun && needsConfirm) {
     if (!interactive) {
-      printUninstallPlan(classified.deletable, modifiedWithConsent, skippedMissing);
+      printUninstallPlan(classified.deletable, modifiedWithConsent, skippedMissing, skippedUnsafe);
       console.error('Forge needs your decision on edited files; re-run with --yes or --force to accept deletion + backup.');
       return 1;
     }
@@ -542,14 +551,14 @@ async function runUninstall(options: CliOptions, promptIO: PromptIO): Promise<nu
     }
   }
 
-  printUninstallPlan(classified.deletable, modifiedWithConsent, skippedMissing);
+  printUninstallPlan(classified.deletable, modifiedWithConsent, skippedMissing, skippedUnsafe);
   if (options.dryRun) {
     if (interactive) p.outro(pc.cyan('Dry run complete.'), clackIO(promptIO));
     return 0;
   }
 
   const toRemove = [...classified.deletable, ...modifiedWithConsent];
-  await pruneEntries(toRemove);
+  await pruneEntries(toRemove, roots);
   const targetedPaths = new Set(targeted.map((entry) => entry.path));
   const remaining = manifest.entries.filter((entry) => !targetedPaths.has(entry.path));
   if (remaining.length === 0) {
@@ -560,6 +569,7 @@ async function runUninstall(options: CliOptions, promptIO: PromptIO): Promise<nu
 
   console.log(`Removed ${toRemove.length} file(s).`);
   if (skippedMissing.length > 0) console.log(`${skippedMissing.length} file(s) were already missing.`);
+  if (skippedUnsafe.length > 0) console.error(`Warning: skipped ${skippedUnsafe.length} file(s) outside Forge's install roots (unsafe path); they were NOT removed.`);
   if (interactive) p.outro(pc.green('Forge was uninstalled.'), clackIO(promptIO));
   return 0;
 }
@@ -617,11 +627,12 @@ async function promptForUninstall(deletable: ManifestEntry[], modifiedWithConsen
   return accepted;
 }
 
-function printUninstallPlan(deletable: ManifestEntry[], modifiedWithConsent: PrunePlanItem[], skippedMissing: PrunePlanItem[]): void {
+function printUninstallPlan(deletable: ManifestEntry[], modifiedWithConsent: PrunePlanItem[], skippedMissing: PrunePlanItem[], skippedUnsafe: PrunePlanItem[]): void {
   console.log(`uninstall: ${deletable.length + modifiedWithConsent.length} file(s) to remove`);
   for (const entry of deletable) console.log(`- delete ${entry.platform} ${entry.kind} ${entry.name} -> ${entry.path}`);
   for (const entry of modifiedWithConsent) console.log(`- delete ${entry.platform} ${entry.kind} ${entry.name} -> ${entry.path} [backup -> ${entry.backupPath}]`);
   for (const entry of skippedMissing) console.log(`- skip missing ${entry.platform} ${entry.kind} ${entry.name} -> ${entry.path}`);
+  for (const entry of skippedUnsafe) console.log(`- skip unsafe ${entry.platform} ${entry.kind} ${entry.name} -> ${entry.path}`);
 }
 
 async function runList(promptIO: PromptIO): Promise<number> {
@@ -818,6 +829,7 @@ function printPlan(command: string, sourceCount: number, files: OutputFile[], di
   for (const item of prunePlan.deletable) console.log(`- delete stale ${item.platform} ${item.kind} ${item.name} -> ${item.path}`);
   for (const item of prunePlan.modifiedWithConsent) console.log(`- delete stale ${item.platform} ${item.kind} ${item.name} -> ${item.path} [backup -> ${item.backupPath}]`);
   for (const item of prunePlan.skippedMissing) console.log(`- skip missing ${item.platform} ${item.kind} ${item.name} -> ${item.path}`);
+  for (const item of prunePlan.skippedUnsafe) console.log(`- skip unsafe ${item.platform} ${item.kind} ${item.name} -> ${item.path}`);
   for (const item of diagnostics) console.log(formatDiagnostic(item));
 }
 

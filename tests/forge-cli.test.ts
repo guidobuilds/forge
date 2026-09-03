@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { access, chmod, readdir, symlink } from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,11 +16,12 @@ import { parseFrontmatter } from '../src/frontmatter.js';
 import { buildManifest, hashProjectPath, legacyStateRoot, loadManifest, migrateStateDirectory, resolveManifestLocation, saveManifest, sha256, type AssetManifest } from '../src/manifest.js';
 import { composeBody } from '../src/compose.js';
 import { DISPATCH_SNIPPETS } from '../src/dispatch-snippets.js';
+import { resolveExecutable } from '../src/executable-resolution.js';
 import { discoverOpenCodeModels } from '../src/opencode-discovery.js';
 import { getModelPreference, loadModelPreferences, saveModelPreferences, setModelPreference } from '../src/model-preferences.js';
 import { supportsModel } from '../src/platform-capabilities.js';
 import { buildWritePlan, discoverArtifacts } from '../src/processor.js';
-import { buildUpdateCommand, detectInstallMethod, runSelfUpdate } from '../src/self-update.js';
+import { buildUpdateCommand, detectInstallMethod, isValidVersionSpec, normalizeVersionSpec, runSelfUpdate } from '../src/self-update.js';
 import { checkLatestVersion, compareSemver, formatVersionNotice } from '../src/version-check.js';
 import { writeOutputs } from '../src/writer.js';
 import type { CanonicalArtifact } from '../src/model.js';
@@ -1402,6 +1403,287 @@ test('runSelfUpdate surfaces instructions when install method is npx', async () 
   assert.equal(code, 1);
   assert.equal(spawnCalls, 0);
   assert.ok(logs.some((line) => /No global install/.test(line)));
+});
+
+// ---------------------------------------------------------------------------
+// Security hardening: A (scope-guard), B (subprocess-guard), M1 (to-version),
+// M12 (atomic-write), M2 (corrupt-state), C (opencode-perms).
+// ---------------------------------------------------------------------------
+
+test('scope-guard: prune skips out-of-scope manifest entries', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  const victimDir = await tempDir('forge-fixture-');
+  const victim = path.join(victimDir, 'victim.txt');
+  await writeFile(victim, 'important');
+  await withCwd(root, async () => {
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'stale-agent', path: victim, sourcePath: 'artifacts/stale-agent/stale-agent.md', checksum: sha256('important'), forgeVersion: 'test' }]);
+    const output = await captureConsole(() => main(['update', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /skip unsafe opencode agent stale-agent/);
+    assert.equal(await readFile(victim, 'utf8'), 'important'); // victim survives
+  });
+});
+
+test('scope-guard: uninstall skips out-of-scope manifest entries', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  const victimDir = await tempDir('forge-fixture-');
+  const victim = path.join(victimDir, 'victim.txt');
+  await writeFile(victim, 'important');
+  await withCwd(root, async () => {
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'test-agent', path: victim, sourcePath: 'artifacts/test-agent/test-agent.md', checksum: sha256('important'), forgeVersion: 'test' }]);
+    const output = await captureConsole(() => main(['uninstall', '--platform', 'opencode', '--scope', 'project', '--yes'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /skip unsafe opencode agent test-agent/);
+    assert.equal(await readFile(victim, 'utf8'), 'important'); // victim survives
+  });
+});
+
+test('scope-guard: schema-invalid manifest entries are rejected before delete', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    const inScope = path.join(root, '.opencode', 'agents', 'victim.md');
+    await mkdir(path.dirname(inScope), { recursive: true });
+    await writeFile(inScope, 'content');
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'victim', path: inScope, sourcePath: 'artifacts/victim/victim.md', checksum: 'not-a-hex-checksum', forgeVersion: 'test' }]);
+    const output = await captureConsole(() => main(['update', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /skip unsafe opencode agent victim/);
+    assert.equal(await readFile(inScope, 'utf8'), 'content'); // survives despite being stale + in-scope
+  });
+});
+
+test('scope-guard: symlinked out-of-scope path is rejected', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  const victimDir = await tempDir('forge-fixture-');
+  const victim = path.join(victimDir, 'victim.txt');
+  await writeFile(victim, 'important');
+  await withCwd(root, async () => {
+    const link = path.join(root, '.opencode', 'agents', 'evil.md');
+    await mkdir(path.dirname(link), { recursive: true });
+    await symlink(victim, link);
+    await writeTestManifest(root, home, [{ platform: 'opencode', kind: 'agent', name: 'evil', path: link, sourcePath: 'artifacts/evil/evil.md', checksum: sha256('important'), forgeVersion: 'test' }]);
+    const output = await captureConsole(() => main(['update', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    assert.equal(output.code, 0);
+    assert.match(output.stdout, /skip unsafe opencode agent evil/);
+    assert.equal(await readFile(victim, 'utf8'), 'important'); // symlink target survives
+  });
+});
+
+test('subprocess-guard: resolveExecutable returns absolute path', async () => {
+  const binDir = await tempDir('forge-fixture-');
+  const tool = path.join(binDir, 'mytool');
+  await writeFile(tool, '#!/bin/sh\n');
+  await chmod(tool, 0o755);
+  const resolved = resolveExecutable('mytool', { path: binDir });
+  assert.equal(resolved, tool);
+  assert.ok(path.isAbsolute(resolved ?? ''));
+  assert.equal(resolveExecutable('does-not-exist', { path: binDir }), undefined);
+});
+
+test('subprocess-guard: resolveExecutable rejects binaries inside cwd', async () => {
+  const cwd = await tempDir('forge-fixture-');
+  const binSubdir = path.join(cwd, 'node_modules', '.bin');
+  await mkdir(binSubdir, { recursive: true });
+  const shim = path.join(binSubdir, 'opencode');
+  await writeFile(shim, '#!/bin/sh\n');
+  await chmod(shim, 0o755);
+  assert.equal(resolveExecutable('opencode', { cwd, path: binSubdir }), undefined);
+  assert.equal(resolveExecutable('opencode', { path: binSubdir }), shim); // resolves when not inside cwd
+});
+
+test('subprocess-guard: discovery does not execute a repo-local opencode shim', async () => {
+  const shimDir = await tempDir('forge-fixture-');
+  const marker = path.join(shimDir, 'PWNED');
+  const shim = path.join(shimDir, 'opencode');
+  await writeFile(shim, `#!/bin/sh\necho anthropic/claude-sonnet-4\ntouch "${marker}"\n`);
+  await chmod(shim, 0o755);
+  const prevPath = process.env.PATH;
+  process.env.PATH = shimDir;
+  try {
+    const models = await discoverOpenCodeModels(shimDir);
+    assert.equal(models, undefined);
+    await assert.rejects(access(marker)); // marker absent → shim never executed
+  } finally {
+    process.env.PATH = prevPath;
+  }
+});
+
+test('subprocess-guard: self-update resolves package managers to absolute paths', async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const code = await runSelfUpdate({
+    binaryPath: '/Users/guido/Library/pnpm/bin/forge-ai',
+    realPathResolver: () => '/Users/guido/Library/pnpm/global/v11/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs',
+    resolveCommand: (command) => (command === 'pnpm' ? '/usr/local/bin/pnpm' : command === 'forge-ai' ? '/usr/local/bin/forge-ai' : undefined),
+    spawner: (command, args) => { calls.push({ command, args }); return { status: 0 }; },
+    log: () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].command, '/usr/local/bin/pnpm');
+  assert.equal(calls[1].command, '/usr/local/bin/forge-ai');
+  assert.ok(calls.every((c) => path.isAbsolute(c.command)));
+});
+
+test('to-version: isValidVersionSpec accepts semver, v-prefixed semver, and latest', () => {
+  assert.equal(isValidVersionSpec('latest'), true);
+  assert.equal(isValidVersionSpec('0.4.0'), true);
+  assert.equal(isValidVersionSpec('v0.4.0'), true);
+  assert.equal(isValidVersionSpec('1.2.3-beta.1+build.5'), true);
+  assert.equal(isValidVersionSpec('v1.2.3-rc.1'), true);
+  assert.equal(isValidVersionSpec('github:user/repo'), false);
+  assert.equal(isValidVersionSpec('^1.0.0'), false);
+  assert.equal(isValidVersionSpec('~1.0.0'), false);
+  assert.equal(isValidVersionSpec('>=1.0.0 <2.0.0'), false);
+  assert.equal(isValidVersionSpec('0.4'), false);
+  assert.equal(isValidVersionSpec('beta'), false);
+  assert.equal(isValidVersionSpec(''), false);
+});
+
+test('to-version: normalizeVersionSpec strips a leading v', () => {
+  assert.equal(normalizeVersionSpec('v0.4.0'), '0.4.0');
+  assert.equal(normalizeVersionSpec('0.4.0'), '0.4.0');
+  assert.equal(normalizeVersionSpec('latest'), 'latest');
+});
+
+test('to-version: self-update rejects a non-semver --to value', async () => {
+  const output = await captureConsole(() => main(['self-update', '--to', 'github:user/repo'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+  assert.equal(output.code, 1);
+  assert.match(output.stderr, /Invalid --to github:user\/repo; expected a semver or "latest"/);
+});
+
+test('to-version: self-update accepts semver and latest --to values', async () => {
+  for (const spec of ['0.4.0', 'latest', 'v0.4.0']) {
+    const output = await captureConsole(() => main(['self-update', '--to', spec], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
+    assert.doesNotMatch(output.stderr, /Invalid --to/);
+  }
+});
+
+test('to-version: v-prefixed --to normalizes to bare semver', async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const code = await runSelfUpdate({
+    binaryPath: '/Users/guido/Library/pnpm/bin/forge-ai',
+    version: 'v0.4.0',
+    realPathResolver: () => '/Users/guido/Library/pnpm/global/v11/node_modules/@guidobuilds/forge-ai/bin/forge-ai.mjs',
+    spawner: (command, args) => { calls.push({ command, args }); return { status: 0 }; },
+    log: () => {},
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(calls[0].args, ['add', '-g', '@guidobuilds/forge-ai@0.4.0', '--prefer-online']);
+});
+
+test('atomic-write: saveManifest and saveModelPreferences round-trip without temp residue', async () => {
+  const dir = await tempDir('forge-home-');
+  const manifestPath = path.join(dir, 'manifest.json');
+  const manifest = { schemaVersion: 2, scope: 'project', forgeVersion: 'test', updatedAt: new Date(0).toISOString(), entries: [] } as AssetManifest;
+  await saveManifest(manifestPath, manifest);
+  assert.deepEqual(JSON.parse(await readFile(manifestPath, 'utf8')), manifest);
+
+  const prefsPath = path.join(dir, 'prefs.json');
+  await saveModelPreferences(prefsPath, { claude: { forge: 'haiku' } });
+  assert.deepEqual(JSON.parse(await readFile(prefsPath, 'utf8')), { claude: { forge: 'haiku' } });
+
+  const entries = await readdir(dir);
+  assert.equal(entries.filter((name) => name.includes('.tmp-')).length, 0);
+});
+
+test('atomic-write: writeOutputs detects a file changed after classification', async () => {
+  const root = await fixtureRoot();
+  const home = await tempHome();
+  await withCwd(root, async () => {
+    await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
+    // main() computes entry paths from process.cwd(), which is the realpath'd cwd (macOS resolves
+    // /var → /private/var on chdir) — so use the canonical cwd here to match the manifest entries.
+    const cwd = await realpath(root);
+    const target = path.join(cwd, '.opencode', 'agents', 'test-agent.md');
+    await writeFile(target, 'my edits');
+    const location = await resolveManifestLocation('project', cwd, home);
+    const manifest = await loadManifest(location.manifestPath);
+    const plan = await buildWritePlan({ source: root, platform: 'opencode', scope: 'project', cwd, manifest, checkCollisions: true });
+    const file = plan.files.find((f) => f.name === 'test-agent');
+    assert.equal(file?.status, 'managed-modified');
+    assert.ok(file?.expectedChecksum);
+    await writeFile(target, 'changed after classify');
+    await assert.rejects(writeOutputs(plan.files), /changed after classification/);
+  });
+});
+
+test('corrupt-state: loadManifest recovers from malformed JSON without throwing', async () => {
+  const home = await tempHome();
+  const location = await resolveManifestLocation('user', process.cwd(), home);
+  await mkdir(path.dirname(location.manifestPath), { recursive: true });
+  await writeFile(location.manifestPath, '{ not valid json');
+  const out = await captureConsole(async () => {
+    assert.equal(await loadManifest(location.manifestPath), undefined);
+    return 0;
+  });
+  assert.match(out.stderr, /state file corrupt/);
+});
+
+test('corrupt-state: loadManifest recovers from non-object JSON shapes without throwing', async () => {
+  const home = await tempHome();
+  const location = await resolveManifestLocation('user', process.cwd(), home);
+  await mkdir(path.dirname(location.manifestPath), { recursive: true });
+  for (const junk of ['[1,2,3]', '"hello"', '42', 'null', '{"no":"entries"}']) {
+    await writeFile(location.manifestPath, junk);
+    assert.equal(await loadManifest(location.manifestPath), undefined);
+  }
+});
+
+test('corrupt-state: loadModelPreferences recovers from malformed JSON without throwing', async () => {
+  const dir = await tempDir('forge-home-');
+  const prefsPath = path.join(dir, 'prefs.json');
+  await writeFile(prefsPath, '{ bad json');
+  const out = await captureConsole(async () => {
+    assert.deepEqual(await loadModelPreferences(prefsPath), {});
+    return 0;
+  });
+  assert.match(out.stderr, /state file corrupt/);
+  await writeFile(prefsPath, '[1,2,3]');
+  assert.deepEqual(await loadModelPreferences(prefsPath), {});
+});
+
+test('corrupt-state: bin shim prints a message without a raw stack trace', async () => {
+  const home = await tempHome();
+  await writeFile(path.join(home, '.forge'), 'not a directory');
+  try {
+    await execFile(process.execPath, [path.join(process.cwd(), 'bin', 'forge-ai.mjs'), 'install', '--source', path.join(process.cwd(), 'artifacts'), '--platform', 'opencode', '--scope', 'user', '--yes'], { env: { ...process.env, HOME: home } });
+    assert.fail('expected the CLI to exit non-zero');
+  } catch (error) {
+    const stderr = (error as { stderr?: string }).stderr ?? '';
+    assert.ok(stderr.length > 0, 'expected an error message');
+    assert.doesNotMatch(stderr, /\n\s+at /); // no raw stack trace frames
+  }
+});
+
+test('opencode-perms: invalid permission blocks are rejected with a diagnostic', () => {
+  const nested: CanonicalArtifact = { ...agent, opencode: { permissions: { bash: { 'git *': 'allow' } } } };
+  const rendered = renderOpenCodeAgent(nested);
+  assert.doesNotMatch(rendered.content, /permission:/);
+  assert.ok(rendered.diagnostics.some((d) => d.code === 'OPENCODE_INVALID_PERMISSIONS'));
+
+  const arrayVal: CanonicalArtifact = { ...agent, opencode: { permissions: ['read'] } };
+  assert.ok(renderOpenCodeAgent(arrayVal).diagnostics.some((d) => d.code === 'OPENCODE_INVALID_PERMISSIONS'));
+});
+
+test('opencode-perms: oversized permission blocks are rejected', () => {
+  const big: Record<string, string> = {};
+  for (let i = 0; i < 65; i += 1) big[`tool${i}`] = 'allow';
+  const oversized: CanonicalArtifact = { ...agent, opencode: { permissions: big } };
+  assert.ok(renderOpenCodeAgent(oversized).diagnostics.some((d) => d.code === 'OPENCODE_INVALID_PERMISSIONS'));
+});
+
+test('opencode-perms: allow/deny/boolean permission values are accepted', () => {
+  const allowDeny: CanonicalArtifact = { ...agent, opencode: { permissions: { read: 'allow', write: 'deny', edit: 'ask' } } };
+  const rendered = renderOpenCodeAgent(allowDeny);
+  assert.match(rendered.content, /permission:/);
+  assert.equal(rendered.diagnostics.length, 0);
+
+  const boolVal: CanonicalArtifact = { ...agent, opencode: { permissions: { read: true } } };
+  assert.match(renderOpenCodeAgent(boolVal).content, /permission:/);
 });
 
 async function fixtureRoot(): Promise<string> {

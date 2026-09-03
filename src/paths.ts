@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Platform, Scope, SourceKind } from './model.js';
@@ -43,4 +44,37 @@ function projectBase(platform: Platform, kind: SourceKind, cwd: string): string 
   if (platform === 'claude') return path.join(cwd, '.claude', kind === 'agent' ? 'agents' : 'skills');
   if (platform === 'grok') return path.join(cwd, '.grok', kind === 'agent' ? 'agents' : 'skills');
   return kind === 'agent' ? path.join(cwd, '.codex', 'agents') : path.join(cwd, '.agents', 'skills');
+}
+
+const ALL_PLATFORMS: Platform[] = ['opencode', 'claude', 'codex', 'grok'];
+const ALL_KINDS: SourceKind[] = ['agent', 'skill'];
+
+function canonicalizePath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+// Single source of truth for the install roots a manifest entry's `path` must live inside.
+// Derived from userBase/projectBase/openCodeUserRoots (never hand-enumerated) so it cannot drift
+// from the real install locations. home/cwd/projectPath are canonicalized (realpath) so a
+// symlinked ~/.claude or project dir does not cause false rejections. Project scope uses the
+// manifest's projectPath (the realpath recorded at install), not the caller's current cwd.
+export function allowedInstallRoots(scope: Scope, home: string, cwd: string, projectPath?: string): string[] {
+  const roots: string[] = [];
+  if (scope === 'user') {
+    const canonicalHome = canonicalizePath(home);
+    for (const platform of ALL_PLATFORMS) {
+      for (const kind of ALL_KINDS) roots.push(userBase(platform, kind, canonicalHome));
+    }
+    roots.push(path.join(openCodeUserRoots(canonicalHome).v2, 'agents'), path.join(openCodeUserRoots(canonicalHome).v2, 'skills'));
+  } else {
+    const canonicalProject = canonicalizePath(projectPath ?? cwd);
+    for (const platform of ALL_PLATFORMS) {
+      for (const kind of ALL_KINDS) roots.push(projectBase(platform, kind, canonicalProject));
+    }
+  }
+  return [...new Set(roots)];
 }

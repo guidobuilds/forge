@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { access, cp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants, realpathSync } from 'node:fs';
+import { access, cp, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { OutputFile, Platform, Scope, SourceKind } from './model.js';
 
@@ -35,7 +35,7 @@ export type ManifestLocation = {
   projectPathHash?: string;
 };
 
-export type PrunePlanItem = ManifestEntry & { reason?: 'checksum-mismatch' | 'missing'; backupPath?: string };
+export type PrunePlanItem = ManifestEntry & { reason?: 'checksum-mismatch' | 'missing' | 'unsafe-path'; backupPath?: string };
 
 export function legacyStateRoot(home: string): string {
   return path.join(home, '.forge-ai');
@@ -134,14 +134,25 @@ async function summarize(manifest: AssetManifest, location: ManifestLocation, ho
 }
 
 export async function loadManifest(manifestPath: string): Promise<AssetManifest | undefined> {
+  let raw: AssetManifestV1 | AssetManifest;
   try {
-    const raw = JSON.parse(await readFile(manifestPath, 'utf8')) as AssetManifestV1 | AssetManifest;
-    if (raw.schemaVersion === 1) return upgradeManifestV1(raw);
-    return raw;
+    raw = JSON.parse(await readFile(manifestPath, 'utf8')) as AssetManifestV1 | AssetManifest;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (error instanceof SyntaxError) {
+      console.error(`state file corrupt at ${manifestPath}; re-run \`forge-ai install\` to regenerate it.`);
+      return undefined;
+    }
     throw error;
   }
+  // Validate shape BEFORE accessing fields — parseable non-objects ("hi", [1,2], 42, null) throw
+  // TypeError (not SyntaxError) on `raw.schemaVersion`, so shape-mismatch must be caught here.
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || !Array.isArray(raw.entries)) {
+    console.error(`state file corrupt at ${manifestPath}; re-run \`forge-ai install\` to regenerate it.`);
+    return undefined;
+  }
+  if (raw.schemaVersion === 1) return upgradeManifestV1(raw);
+  return raw;
 }
 
 function upgradeManifestV1(manifest: AssetManifestV1): AssetManifest {
@@ -179,9 +190,20 @@ export async function buildManifest(location: ManifestLocation, files: OutputFil
   };
 }
 
+export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const tmpPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tmp-${randomUUID()}`);
+  try {
+    await writeFile(tmpPath, content, 'utf8');
+    await rename(tmpPath, filePath);
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 export async function saveManifest(manifestPath: string, manifest: AssetManifest): Promise<void> {
   await mkdir(path.dirname(manifestPath), { recursive: true });
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 export function lookupEntryByPath(manifest: AssetManifest | undefined, filePath: string): ManifestEntry | undefined {
@@ -194,10 +216,14 @@ export function staleEntries(oldManifest: AssetManifest | undefined, files: Outp
   return oldManifest.entries.filter((entry) => !currentPaths.has(entry.path));
 }
 
-export async function classifyPruneEntries(entries: ManifestEntry[]): Promise<{ deletable: PrunePlanItem[]; skipped: PrunePlanItem[] }> {
+export async function classifyPruneEntries(entries: ManifestEntry[], roots: string[]): Promise<{ deletable: PrunePlanItem[]; skipped: PrunePlanItem[] }> {
   const deletable: PrunePlanItem[] = [];
   const skipped: PrunePlanItem[] = [];
   for (const entry of entries) {
+    if (!isSafeManifestEntry(entry, roots)) {
+      skipped.push({ ...entry, reason: 'unsafe-path' });
+      continue;
+    }
     let content: string;
     try {
       content = await readFile(entry.path, 'utf8');
@@ -212,8 +238,9 @@ export async function classifyPruneEntries(entries: ManifestEntry[]): Promise<{ 
   return { deletable, skipped };
 }
 
-export async function pruneEntries(entries: PrunePlanItem[]): Promise<void> {
+export async function pruneEntries(entries: PrunePlanItem[], roots: string[]): Promise<void> {
   for (const entry of entries) {
+    if (!isSafeManifestEntry(entry, roots)) continue; // defense in depth: never rm an out-of-scope path
     if (entry.backupPath) {
       try {
         const content = await readFile(entry.path, 'utf8');
@@ -248,6 +275,45 @@ export async function backupFile(backupPath: string, content: string): Promise<v
 
 export function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+const CHECKSUM_PATTERN = /^[0-9a-f]{64}$/;
+
+function canonicalizePath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+// True when `p` is absolute and canonicalizes (realpath) to inside one of the already-canonical
+// `roots` (canonical→canonical comparison; path.relative resolves `..` internally).
+export function isSafeManifestPath(p: string, roots: string[]): boolean {
+  if (!path.isAbsolute(p)) return false;
+  const resolved = canonicalizePath(p);
+  return roots.some((root) => {
+    const rel = path.relative(root, resolved);
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
+}
+
+function hasValidEntrySchema(entry: unknown): entry is ManifestEntry {
+  if (typeof entry !== 'object' || entry === null) return false;
+  const e = entry as Record<string, unknown>;
+  return (
+    typeof e.platform === 'string' &&
+    typeof e.kind === 'string' &&
+    typeof e.name === 'string' &&
+    typeof e.path === 'string' &&
+    typeof e.sourcePath === 'string' &&
+    typeof e.checksum === 'string' &&
+    CHECKSUM_PATTERN.test(e.checksum)
+  );
+}
+
+export function isSafeManifestEntry(entry: ManifestEntry, roots: string[]): boolean {
+  return hasValidEntrySchema(entry) && isSafeManifestPath(entry.path, roots);
 }
 
 export function hashProjectPath(projectPath: string): string {

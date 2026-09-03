@@ -52,6 +52,9 @@ export type OutputFile = {
   content: string;
   status?: FileStatus;
   backupPath?: string;
+  // sha256 of the destination content read at classification time (set only when the file
+  // classifies as `managed-modified`); writeOutputs re-checks it immediately before overwriting.
+  expectedChecksum?: string;
 };
 
 export type PendingDecisions = {
