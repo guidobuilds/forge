@@ -100,7 +100,7 @@ Install with the npm CLI:
 npx @guidobuilds/forge-ai install
 ```
 
-The installer prompts for the target agent platform, whether Forge should be installed globally for your user or locally for the current project, and — interactively — which model each agent should use: keep each agent's recommended default, or choose per agent. For OpenCode, the per-agent prompt shows the models you actually have configured (via `opencode models`, falling back to free-text entry if that command isn't available), not a generic list.
+The installer prompts for the target agent platform, whether Forge should be installed globally for your user or locally for the current project, and — interactively — which model each agent should use: keep each agent's recommended default, or choose per agent. For OpenCode, Codex, and Grok, the per-agent prompt shows the models you actually have configured (via `opencode models`, `codex debug models`, or `grok models`, falling back to a curated list or free-text entry if the command isn't available), not a generic list.
 
 To choose models non-interactively (requires an explicit single `--platform` — model ids aren't portable across platforms):
 
@@ -298,7 +298,7 @@ Prints every recorded install — the user-scope one, if any, plus one line per 
 npx @guidobuilds/forge-ai configure --platform claude --scope user
 ```
 
-Change which model an already-installed agent uses without a full reinstall. Interactively, it walks every agent on the given scope/platform that supports a model (using OpenCode's live `opencode models` output where applicable, same as `install`). Non-interactively, pass `--model <id>` or `--model-map name=model,...` (same rules as `install`: an explicit single `--platform`, no `--force`/`--yes` — the point of the command is to make a choice, not skip one). Only the affected files are rewritten; the manifest and every other installed platform are left untouched.
+Change which model an already-installed agent uses without a full reinstall. Interactively, it walks every agent on the given scope/platform that supports a model (using each platform's live model discovery where applicable, same as `install`). Non-interactively, pass `--model <id>` or `--model-map name=model,...` (same rules as `install`: an explicit single `--platform`, no `--force`/`--yes` — the point of the command is to make a choice, not skip one). Only the affected files are rewritten; the manifest and every other installed platform are left untouched.
 
 ## Project Status
 

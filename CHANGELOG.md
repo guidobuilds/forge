@@ -9,6 +9,40 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-05
+
+### Added
+
+- **Dynamic model discovery.** The per-agent model prompt (`install` and `configure`) now discovers
+  the models each harness's own CLI reports for that user, instead of relying only on curated lists,
+  via a shared `src/model-discovery.ts` module:
+  - one `ModelDiscoveryRunner` contract + `defaultRunner` (spawnSync + `resolveExecutable`, absolute-
+    path allowlist, no `cwd` passthrough), shared caps (5s timeout, 1 MB stdout, 500 models), a pure
+    `mergeLiveWithCurated(live, curated)` live-first/stable-order dedupe helper, and a
+    `discoverModels(platform, cwd)` dispatcher that returns `string[] | undefined` on any failure
+    (never throws). `src/opencode-discovery.ts` is now a backward-compatible re-export shim.
+  - **OpenCode** — unchanged behavior, now under the shared module + caps (`opencode`/`opencode2 models`).
+  - **Codex** — `codex debug models` JSON is parsed for `visibility === 'list'` slugs (`hide` entries
+    like `gpt-reserve`/`codex-auto-review` excluded), each slug trimmed + re-validated; curated
+    fallback on failure.
+  - **Grok** — `grok models` output is parsed for the `*` (default) / `-` (available) lines, ignoring
+    the `You are not authenticated.` banner; curated Forge aliases (`grok-build`, `grok-build-plan`,
+    `grok-composer-2.5-fast`, `inherit`) are merged in as extras on a successful live query.
+  - **Claude** — documented as having no CLI model-enumeration command; `discoverClaudeModels` always
+    returns `undefined`, so Claude stays curated + free text, never an empty/spurious list.
+- `modelChoicesFor(platform, discovered)` — a discovery-aware per-platform funnel (live-first,
+  curated-fallback, never an empty list) and `withLiveLabels(values, liveSet)` — a pure helper that
+  suffixes a live-derived option's *label* with ` (live)` while keeping the select value bare.
+- A single info diagnostic on non-Claude discovery failure
+  (`forge: model discovery for <platform> failed; using curated fallback.`), rendered inside the
+  clack frame when interactive, `console.error` otherwise.
+
+### Changed
+
+- The curated `knownCodexModels` offline fallback now matches the observed list-visible
+  `codex debug models` catalog (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+  `gpt-5.4-mini`) — suggestions-only, never a validation gate, updated only from fresh live evidence.
+
 ## [0.8.0] - 2026-09-03
 
 ### Added
