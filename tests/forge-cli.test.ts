@@ -6,11 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { promisify } from 'node:util';
+import { knownClaudeModels } from '../src/adapters/claude-known.js';
 import { renderClaudeAgent, renderClaudeSkill } from '../src/adapters/claude.js';
+import { knownCodexModels, isKnownCodexModel } from '../src/adapters/codex-known.js';
 import { renderCodexAgent, renderCodexSkill } from '../src/adapters/codex.js';
+import { knownGrokModels } from '../src/adapters/grok-known.js';
 import { renderGrokAgent, renderGrokSkill } from '../src/adapters/grok.js';
 import { renderOpenCodeAgent, renderOpenCodeSkill } from '../src/adapters/opencode.js';
-import { main } from '../src/cli.js';
+import { main, modelChoicesFor, withLiveLabels } from '../src/cli.js';
 import { discoverSources } from '../src/discovery.js';
 import { parseFrontmatter } from '../src/frontmatter.js';
 import { buildManifest, hashProjectPath, legacyStateRoot, loadManifest, migrateStateDirectory, resolveManifestLocation, saveManifest, sha256, type AssetManifest } from '../src/manifest.js';
@@ -18,6 +21,7 @@ import { composeBody } from '../src/compose.js';
 import { DISPATCH_SNIPPETS } from '../src/dispatch-snippets.js';
 import { resolveExecutable } from '../src/executable-resolution.js';
 import { discoverOpenCodeModels } from '../src/opencode-discovery.js';
+import { discoverClaudeModels, discoverCodexModels, discoverGrokModels, discoverModels, mergeLiveWithCurated, MODEL_DISCOVERY_MAX_MODELS, MODEL_DISCOVERY_MAX_STDOUT_BYTES } from '../src/model-discovery.js';
 import { getModelPreference, loadModelPreferences, saveModelPreferences, setModelPreference } from '../src/model-preferences.js';
 import { supportsModel } from '../src/platform-capabilities.js';
 import { buildWritePlan, discoverArtifacts } from '../src/processor.js';
@@ -93,6 +97,186 @@ test('codex agent accepts any non-whitespace model (format unverified, permissiv
   assert.equal(renderCodexAgent(withModel).diagnostics.filter((item) => item.code === 'CODEX_UNKNOWN_MODEL').length, 0);
   const withSpace: CanonicalArtifact = { ...agent, codex: { model: 'not a model' } };
   assert.ok(renderCodexAgent(withSpace).diagnostics.some((item) => item.code === 'CODEX_UNKNOWN_MODEL'));
+});
+
+// Regression: before this fix, `promptForModelValue` had no `codex` branch, so `knownChoices` was
+// undefined for codex and the interactive `Model for \`<name>\` (codex)` prompt fell straight
+// through to a blank free-text field with no options/autocomplete. `modelChoicesFor` is that
+// platform→choices mapping; for codex it must now return the curated list (never undefined).
+test('modelChoicesFor proposes curated codex models (regression: codex previously offered none)', () => {
+  const codexChoices = modelChoicesFor('codex', {});
+  assert.ok(codexChoices && codexChoices.length > 0, 'codex must offer a curated model list, not fall through to free text');
+  assert.deepEqual(codexChoices, [...knownCodexModels]);
+  // Every offered codex model id is a value the permissive validator accepts (non-empty, no whitespace).
+  for (const model of codexChoices) assert.equal(isKnownCodexModel(model), true);
+});
+
+test('knownCodexModels is a non-empty, distinct list of accepted codex model ids', () => {
+  assert.ok(knownCodexModels.size > 0);
+  assert.equal(knownCodexModels.size, new Set([...knownCodexModels]).size);
+  for (const model of knownCodexModels) {
+    assert.equal(isKnownCodexModel(model), true, `${model} must satisfy the permissive codex model validator`);
+  }
+});
+
+// Regression (adversary break 1): the curated `knownCodexModels` FALLBACK must be the list-visible,
+// user-selectable catalog observed from a real `codex debug models` run on the reference machine
+// (recorded in explore.md §2 / verification.md). A permissive `isKnownCodexModel` check is NOT enough —
+// a wholly-disjoint set (e.g. gpt-5-codex/…) passes it yet presents ids the installed codex does not
+// recognize after a failed live discovery. This fixture is observed evidence, so the test needs no live
+// CLI or network; if the fallback drifts outside this set (a stale/invented id), this test fails.
+test('knownCodexModels fallback is the observed codex selectable catalog (no stale/invented ids)', () => {
+  const observedSelectable = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini'];
+  assert.deepEqual([...knownCodexModels], observedSelectable);
+});
+
+test('modelChoicesFor keeps claude/grok/opencode behavior and returns undefined elsewhere', () => {
+  assert.deepEqual(modelChoicesFor('claude', {}), [...knownClaudeModels]);
+  assert.deepEqual(modelChoicesFor('grok', {}), [...knownGrokModels]);
+  // OpenCode without live discovery has no fixed list — free-text fallback.
+  assert.equal(modelChoicesFor('opencode', {}), undefined);
+  // OpenCode with live discovery returns the discovered models unchanged (highest priority).
+  const discovered = ['anthropic/claude-sonnet-4-5', 'openai/gpt-5.2'];
+  assert.deepEqual(modelChoicesFor('opencode', { opencode: discovered }), discovered);
+});
+
+// ============================================================================
+// Dynamic model discovery (src/model-discovery.ts) — runner-injection tests.
+// No test depends on a live CLI; every parser is driven with a fake runner.
+// ============================================================================
+
+test('discoverModels dispatches each platform to its parser via the injected runner', () => {
+  // codex: routes to `codex debug models`, parses JSON, returns list-visible slugs.
+  const codexRunner = (command: string) => (command === 'codex'
+    ? { status: 0, stdout: JSON.stringify({ models: [{ slug: 'gpt-5.6-sol', visibility: 'list' }] }) }
+    : { status: null, stdout: '' });
+  assert.deepEqual(discoverModels('codex', '/tmp', codexRunner, 1000), ['gpt-5.6-sol']);
+
+  // grok: routes to `grok models`, ignores the banner, parses `*`/`-` lines.
+  const grokRunner = (command: string) => (command === 'grok'
+    ? { status: 0, stdout: 'You are not authenticated.\n  * grok-4.6 (default)\n  - grok-4.5\n' }
+    : { status: null, stdout: '' });
+  assert.deepEqual(discoverModels('grok', '/tmp', grokRunner, 1000), ['grok-4.6', 'grok-4.5']);
+
+  // opencode: routes to `opencode`/`opencode2 models`.
+  const opencodeRunner = (command: string) => (command === 'opencode'
+    ? { status: 0, stdout: 'anthropic/claude-sonnet-4-5\n' }
+    : { status: null, stdout: '' });
+  assert.deepEqual(discoverModels('opencode', '/tmp', opencodeRunner, 1000), ['anthropic/claude-sonnet-4-5']);
+
+  // claude: no dynamic source — returns undefined without ever calling the runner.
+  let called = false;
+  const claudeRunner = () => { called = true; return { status: 0, stdout: '' }; };
+  assert.equal(discoverModels('claude', '/tmp', claudeRunner, 1000), undefined);
+  assert.equal(called, false);
+});
+
+test('discoverClaudeModels always returns undefined (no dynamic source)', () => {
+  assert.equal(discoverClaudeModels('/tmp', 1000, () => ({ status: 0, stdout: 'should-not-be-read' })), undefined);
+});
+
+test('discoverOpenCodeModels enforces the stdout byte cap (over-cap → undefined)', () => {
+  const big = 'x'.repeat(MODEL_DISCOVERY_MAX_STDOUT_BYTES + 1);
+  assert.equal(discoverOpenCodeModels('/tmp', 1000, () => ({ status: 0, stdout: big })), undefined);
+});
+
+test('discoverOpenCodeModels enforces the model-count cap (truncates to the cap)', () => {
+  const many = Array.from({ length: MODEL_DISCOVERY_MAX_MODELS + 1 }, (_, i) => `acme/model-${i}`).join('\n');
+  const result = discoverOpenCodeModels('/tmp', 1000, () => ({ status: 0, stdout: many }));
+  assert.equal(result?.length, MODEL_DISCOVERY_MAX_MODELS);
+  assert.equal(result?.[0], 'acme/model-0');
+  assert.equal(result?.[MODEL_DISCOVERY_MAX_MODELS - 1], `acme/model-${MODEL_DISCOVERY_MAX_MODELS - 1}`);
+});
+
+test('mergeLiveWithCurated dedupes stable order, live first', () => {
+  const live = ['grok-4.6', 'grok-4.5'];
+  const curated = ['inherit', 'grok-build', 'grok-4.5', 'grok-composer-2.5-fast'];
+  assert.deepEqual(mergeLiveWithCurated(live, curated), ['grok-4.6', 'grok-4.5', 'inherit', 'grok-build', 'grok-composer-2.5-fast']);
+});
+
+test('discoverCodexModels parses list-visible slugs from a fixture; undefined on non-JSON / non-zero / over-cap', () => {
+  const fixture = JSON.stringify({ models: [
+    { slug: 'gpt-5.6-sol', visibility: 'list' },
+    { slug: 'gpt-reserve', visibility: 'hide' },
+    { slug: 'codex-auto-review', visibility: 'hide' },
+    { slug: 'gpt-5.6-terra', visibility: 'list' }
+  ] });
+  const ok = discoverCodexModels('/tmp', 1000, () => ({ status: 0, stdout: fixture }));
+  assert.deepEqual(ok, ['gpt-5.6-sol', 'gpt-5.6-terra']);
+
+  // non-JSON output → undefined
+  assert.equal(discoverCodexModels('/tmp', 1000, () => ({ status: 0, stdout: 'not json' })), undefined);
+  // non-zero exit → undefined
+  assert.equal(discoverCodexModels('/tmp', 1000, () => ({ status: 1, stdout: '{}' })), undefined);
+  // over-cap stdout → undefined
+  const big = 'x'.repeat(MODEL_DISCOVERY_MAX_STDOUT_BYTES + 1);
+  assert.equal(discoverCodexModels('/tmp', 1000, () => ({ status: 0, stdout: big })), undefined);
+});
+
+// Regression (adversary break 2): the codex parser must trim and re-validate each slug through
+// `isKnownCodexModel` (rejects empty / whitespace-only), mirroring the grok parser (explore.md §4).
+// Before the fix an empty/`   `/` gpt-5.6-sol ` slug leaked straight through into the choices.
+test('discoverCodexModels trims slugs and discards empty/whitespace (re-validated via isKnownCodexModel)', () => {
+  const fixture = JSON.stringify({ models: [
+    { slug: '', visibility: 'list' },
+    { slug: '   ', visibility: 'list' },
+    { slug: ' gpt-5.6-sol ', visibility: 'list' },
+    { slug: 'gpt-5.6-terra', visibility: 'list' }
+  ] });
+  assert.deepEqual(
+    discoverCodexModels('/tmp', 1000, () => ({ status: 0, stdout: fixture })),
+    ['gpt-5.6-sol', 'gpt-5.6-terra']
+  );
+});
+
+test('discoverGrokModels parses banner + model lines; undefined on banner-only / junk', () => {
+  const bannerList = 'You are not authenticated.\nDefault model: grok-4.6\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n';
+  assert.deepEqual(discoverGrokModels('/tmp', 1000, () => ({ status: 0, stdout: bannerList })), ['grok-4.6', 'grok-4.5']);
+
+  // banner-only → no parseable model lines → undefined
+  assert.equal(discoverGrokModels('/tmp', 1000, () => ({ status: 0, stdout: 'You are not authenticated.\n' })), undefined);
+  // junk lines with no `*`/`-` markers → undefined
+  assert.equal(discoverGrokModels('/tmp', 1000, () => ({ status: 0, stdout: 'foo bar\nbaz qux\n' })), undefined);
+  // `*`-marked lines that fail isKnownGrokModel are dropped → undefined
+  assert.equal(discoverGrokModels('/tmp', 1000, () => ({ status: 0, stdout: '  * not-a-real-grok-model (default)\n' })), undefined);
+});
+
+test('modelChoicesFor honors a per-platform discovery map (live-first, curated fallback, never empty)', () => {
+  // opencode: live or free-text (undefined when no live).
+  assert.deepEqual(modelChoicesFor('opencode', { opencode: ['anthropic/claude-sonnet-4-5'] }), ['anthropic/claude-sonnet-4-5']);
+  assert.equal(modelChoicesFor('opencode', {}), undefined);
+
+  // codex: live, NO merge; curated on failure.
+  assert.deepEqual(modelChoicesFor('codex', { codex: ['gpt-5.6-sol'] }), ['gpt-5.6-sol']);
+  assert.deepEqual(modelChoicesFor('codex', {}), [...knownCodexModels]);
+
+  // grok: live + curated extras merged (deduped, live-first); curated on failure.
+  assert.deepEqual(modelChoicesFor('grok', { grok: ['grok-4.6'] }), ['grok-4.6', ...knownGrokModels]);
+  assert.deepEqual(modelChoicesFor('grok', {}), [...knownGrokModels]);
+
+  // claude: curated always, ignores discovery, never undefined/empty.
+  assert.deepEqual(modelChoicesFor('claude', {}), [...knownClaudeModels]);
+  assert.deepEqual(modelChoicesFor('claude', { claude: ['not-a-real-claude-model'] }), [...knownClaudeModels]);
+});
+
+test('claude model choices always fall back to the curated set (no dynamic source, never empty)', () => {
+  assert.equal(discoverClaudeModels('/tmp', 1000, () => ({ status: 0, stdout: '' })), undefined);
+  const choices = modelChoicesFor('claude', {});
+  assert.ok(choices && choices.length > 0, 'claude must never offer an empty/undefined choice list');
+  assert.deepEqual(choices, [...knownClaudeModels]);
+});
+
+test('withLiveLabels suffixes only live-set values on the label, keeping the value bare', () => {
+  const liveSet = new Set(['grok-4.6', 'grok-4.5']);
+  const labeled = withLiveLabels(['grok-4.6', 'grok-4.5', 'inherit', 'grok-build'], liveSet);
+  assert.deepEqual(labeled, [
+    { value: 'grok-4.6', label: 'grok-4.6 (live)' },
+    { value: 'grok-4.5', label: 'grok-4.5 (live)' },
+    { value: 'inherit', label: 'inherit' },
+    { value: 'grok-build', label: 'grok-build' }
+  ]);
+  // Curated extras and the Custom… escape are never suffixed (not in the live set).
+  assert.deepEqual(withLiveLabels(['__custom__'], liveSet), [{ value: '__custom__', label: '__custom__' }]);
 });
 
 test('claude agent omits tools when no permissions are provided', () => {

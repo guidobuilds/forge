@@ -27,6 +27,12 @@ export function isKnownClaudeTool(name: string): boolean {
   return knownClaudeTools.has(name) || mcpToolPattern.test(name) || agentAllowlistPattern.test(name);
 }
 
+// Claude Code has NO CLI model-enumeration command: `claude --help` exposes only `--model` /
+// `--fallback-model` flags and a non-scriptable in-TUI `/model`. There is no `claude models` /
+// `claude list`. So `discoverClaudeModels` always returns undefined (see src/model-discovery.ts) and
+// the model-choice funnel always falls back to this curated set plus the free-text `Custom…` escape —
+// never an empty/spurious list. Do NOT add a fake dynamic source here; the `discoverModels` dispatch
+// keeps a `claude` branch so a real source could be added later without touching callers.
 export const knownClaudeModels = new Set<string>([
   'sonnet',
   'opus',

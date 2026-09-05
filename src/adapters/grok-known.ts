@@ -26,6 +26,10 @@ export function isKnownGrokTool(name: string): boolean {
   return knownGrokTools.has(name);
 }
 
+// These Forge-specific aliases are NOT advertised by `grok models` — the live catalog only lists the
+// binary's known set (e.g. `grok-4.6`, `grok-4.5`). They are valid config values today, so dynamic
+// discovery (see src/model-discovery.ts::discoverGrokModels) merges them in as extras on a successful
+// live query and uses them as the whole fallback on failure. They must never be silently dropped.
 export const knownGrokModels = new Set<string>([
   'inherit',
   'grok-build',

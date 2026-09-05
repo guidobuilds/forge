@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url';
 import type { Readable, Writable } from 'node:stream';
 import { rm } from 'node:fs/promises';
 import { knownClaudeModels } from './adapters/claude-known.js';
+import { knownCodexModels } from './adapters/codex-known.js';
 import { knownGrokModels } from './adapters/grok-known.js';
 import { formatDiagnostic, hasErrors } from './diagnostics.js';
 import { buildManifest, classifyPruneEntries, detectLegacyStateDrift, listInstalls, loadManifest, pruneEntries, resolveBackupPath, resolveBackupRoot, resolveManifestLocation, saveManifest, stateRoot, staleEntries, type InstallSummary, type ManifestEntry, type PrunePlanItem } from './manifest.js';
 import { getModelPreference, loadModelPreferences, modelPreferencesPath, saveModelPreferences, setModelPreference, type ModelPreferences } from './model-preferences.js';
-import { discoverOpenCodeModels } from './opencode-discovery.js';
+import { discoverModels, mergeLiveWithCurated } from './model-discovery.js';
 import { allowedInstallRoots } from './paths.js';
 import { supportsModel } from './platform-capabilities.js';
 import { buildWritePlan, discoverArtifacts, parsePlatform, parseScope, resolvePlatforms } from './processor.js';
@@ -400,10 +401,11 @@ async function promptForModelSelection(options: CliOptions, promptIO: PromptIO, 
 
   const manifestLocation = await resolveManifestLocation(options.scope, cwd, home);
   let preferences = await loadModelPreferences(modelPreferencesPath(manifestLocation));
-  const discoveredOpenCodeModels = targetPlatforms.includes('opencode') ? discoverOpenCodeModels(cwd) : undefined;
+  const modelablePlatforms = [...new Set(pairs.map((pair) => pair.platform))];
+  const discovered = discoverModelChoices(modelablePlatforms, cwd, promptIO);
   for (const { platform, artifact } of pairs) {
     const current = getModelPreference(preferences, platform, artifact.name) ?? artifact[platform]?.model;
-    const chosen = await promptForModelValue(platform, artifact.name, current, discoveredOpenCodeModels, promptIO);
+    const chosen = await promptForModelValue(platform, artifact.name, current, discovered, promptIO);
     if (chosen === undefined) return false;
     preferences = setModelPreference(preferences, platform, artifact.name, chosen);
   }
@@ -413,18 +415,47 @@ async function promptForModelSelection(options: CliOptions, promptIO: PromptIO, 
 
 const CUSTOM_MODEL_VALUE = '__custom__';
 
-async function promptForModelValue(platform: Platform, artifactName: string, current: string | undefined, discoveredOpenCodeModels: string[] | undefined, promptIO: PromptIO): Promise<string | undefined> {
+// Per-platform discovery map: for each platform, the live model ids discovered this run (or absent
+// when discovery failed / the platform has no dynamic source). `modelChoicesFor` is the pure funnel.
+export type DiscoveredModels = Partial<Record<Platform, string[]>>;
+
+// Pure label helper: suffixes a live-derived value's *label* with ` (live)` so the user can tell live
+// options from curated/merged extras. The select **value** stays the bare model id, so stored
+// preferences and `initialValue` matching are unchanged. Curated extras and the `Custom…` escape are
+// never in the live set, so they are never suffixed.
+export function withLiveLabels(values: string[], liveSet: ReadonlySet<string>): Array<{ value: string; label: string }> {
+  return values.map((value) => ({ value, label: liveSet.has(value) ? `${value} (live)` : value }));
+}
+
+// Curated model suggestions for the interactive per-agent model prompt, or undefined when there is
+// no fixed list (the prompt then falls back to free text). Discovery results are live-first, highest
+// priority. Each platform is an explicit branch — a missing branch fails loudly rather than silently
+// producing a "no choices" path (see the codex-model-options regression in .forge/lessons.md):
+//   opencode: live, else free-text (undefined) — no curated set.
+//   codex:    live, NO merge (the live catalog is the real account-filtered set; merging stale curated
+//             suggestions would present ids the user may not be able to select); curated on failure.
+//   grok:     live + curated extras merged (dedupe, stable order) — `grok models` doesn't advertise the
+//             Forge-specific aliases, so they must survive a successful live query; curated on failure.
+//   claude:   curated always — no dynamic source, never empty/undefined.
+export function modelChoicesFor(platform: Platform, discovered: DiscoveredModels = {}): string[] | undefined {
+  const live = discovered[platform];
+  if (platform === 'opencode') return live && live.length > 0 ? live : undefined;
+  if (platform === 'claude') return [...knownClaudeModels];
+  if (platform === 'codex') return live && live.length > 0 ? live : [...knownCodexModels];
+  if (platform === 'grok') return live && live.length > 0 ? mergeLiveWithCurated(live, knownGrokModels) : [...knownGrokModels];
+  return undefined;
+}
+
+async function promptForModelValue(platform: Platform, artifactName: string, current: string | undefined, discovered: DiscoveredModels, promptIO: PromptIO): Promise<string | undefined> {
   const io = clackIO(promptIO);
-  const knownChoices = platform === 'opencode' && discoveredOpenCodeModels ? discoveredOpenCodeModels
-    : platform === 'claude' ? [...knownClaudeModels]
-    : platform === 'grok' ? [...knownGrokModels]
-    : undefined;
+  const knownChoices = modelChoicesFor(platform, discovered);
   if (knownChoices && knownChoices.length > 0) {
     const initialValue = current && knownChoices.includes(current) ? current : knownChoices[0];
+    const liveSet = new Set(discovered[platform] ?? []);
     const choice = await p.select<string>({
       message: `Model for \`${artifactName}\` (${platform})`,
       initialValue,
-      options: [...knownChoices.map((value) => ({ value, label: value })), { value: CUSTOM_MODEL_VALUE, label: 'Custom…' }],
+      options: [...withLiveLabels(knownChoices, liveSet), { value: CUSTOM_MODEL_VALUE, label: 'Custom…' }],
       ...io
     });
     if (p.isCancel(choice)) return undefined;
@@ -438,6 +469,29 @@ async function promptForModelValue(platform: Platform, artifactName: string, cur
   });
   if (p.isCancel(text)) return undefined;
   return text;
+}
+
+// Compute the per-platform discovery map once per CLI run, scoped to the deduped set of platforms that
+// actually have a modelable pair in this run (so e.g. `install --platform all` with no Codex agent
+// artifact never sparks a needless `codex debug models` spawn). Discovery is synchronous (spawnSync).
+// A failed non-claude discovery emits a single info diagnostic. `claude` is skipped because it has no
+// dynamic source by design (not because it failed). The diagnostic is rendered inside the clack frame
+// (p.log.warn) when the run is interactive so it doesn't corrupt the TUI (raw console.error writes to
+// stderr, the same terminal clack draws on, which clack does not redraw/clear — see lessons.md
+// dynamic-model-discovery); console.error is only the non-interactive fallback.
+function discoverModelChoices(platforms: Platform[], cwd: string, promptIO: PromptIO): DiscoveredModels {
+  const discovered: DiscoveredModels = {};
+  for (const platform of platforms) {
+    const models = discoverModels(platform, cwd);
+    if (models && models.length > 0) {
+      discovered[platform] = models;
+    } else if (platform !== 'claude') {
+      const note = `forge: model discovery for ${platform} failed; using curated fallback.`;
+      if (isInteractivePrompt(promptIO)) p.log.warn(note, clackIO(promptIO));
+      else console.error(note);
+    }
+  }
+  return discovered;
 }
 
 function parseModelMap(value: string): Record<string, string> | undefined {
@@ -721,10 +775,11 @@ async function runConfigure(options: CliOptions, promptIO: PromptIO): Promise<nu
       console.log('No installed agent on the selected scope supports a configurable model.');
       return 0;
     }
-    const discoveredOpenCodeModels = targetPlatforms.includes('opencode') ? discoverOpenCodeModels(cwd) : undefined;
+    const modelablePlatforms = [...new Set(pairs.map((pair) => pair.platform))];
+    const discovered = discoverModelChoices(modelablePlatforms, cwd, promptIO);
     for (const { platform, artifact } of pairs) {
       const current = getModelPreference(preferences, platform, artifact.name) ?? artifact[platform]?.model;
-      const chosen = await promptForModelValue(platform, artifact.name, current, discoveredOpenCodeModels, promptIO);
+      const chosen = await promptForModelValue(platform, artifact.name, current, discovered, promptIO);
       if (chosen === undefined) {
         p.cancel('Cancelled', clackIO(promptIO));
         return 1;
