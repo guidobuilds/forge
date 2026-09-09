@@ -9,6 +9,8 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-09
+
 ### Added
 
 - **`forge-seeker`** — a cheap, read-only evidence collector (Claude `haiku`, Grok
