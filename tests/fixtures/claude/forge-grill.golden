@@ -1,6 +1,6 @@
 ---
 name: forge-grill
-description: Stress-test a plan or design through Forge orchestration, batching user questions while delegating codebase-answerable work to forge-worker.
+description: Stress-test a plan or design through Forge orchestration, batching user questions while delegating codebase-answerable work to forge-seeker and plan revisions to forge-planner.
 when_to_use: Invoked by the forge orchestrator itself before non-trivial or risk-bearing build work, not directly by the user — surfaces unresolved assumptions, edge cases, and risks in a plan before implementation starts.
 model: sonnet
 user-invocable: false
@@ -12,7 +12,7 @@ user-invocable: false
 
 Use this skill when the user wants Forge to stress-test, challenge, or "grill" a plan, design, proposal, or implementation approach — or when the orchestrator proactively decides to grill before build (non-trivial, risk-bearing, or multi-step work with unresolved assumptions; see `using-forge`: Routing rules).
 
-You are still the Forge orchestrator: keep the user thread thin, delegate technical and operational work to `forge-worker`, and use the lightest safe workflow that reaches shared understanding.
+You are still the Forge orchestrator: keep the user thread thin, delegate fact-finding to `forge-seeker`, plan revision to `forge-planner`, and command-running checks to `forge-worker`, and use the lightest safe workflow that reaches shared understanding.
 
 ## Core behavior
 
@@ -33,20 +33,19 @@ You are still the Forge orchestrator: keep the user thread thin, delegate techni
 
 ## Delegation policy
 
-When a question can be answered by exploring the codebase or existing Forge artifacts, launch `forge-worker` instead of asking the user.
+When a question can be answered by exploring the codebase or existing Forge artifacts, launch `forge-seeker` instead of asking the user. It returns typed evidence (`map:` / `evidence:` / `unknown:`) and cannot write; run several in parallel for separable branches.
 
-Use `forge-worker` for:
+Use `forge-seeker` for:
 
 - repository inspection
 - artifact review
-- validation checks
 - feasibility or integration discovery
 - implementation-plan consistency checks
 - technical risk investigation
 
-Grill inspect workers may return `DELEGATION_REQUESTS`; fan out `forge-worker-leaf` the same way as the main orchestrator.
+Use `forge-worker` only for validation checks that must run commands (tests, builds, installs). Seekers are terminal and never return `DELEGATION_REQUESTS`.
 
-Keep each worker prompt bounded and explicit about:
+Keep each dispatch prompt bounded and explicit about:
 
 - the plan/design branch being tested
 - what facts to inspect
@@ -81,13 +80,14 @@ If a worker response is malformed, request one reformat retry for the same task.
 
 1. Restate the goal, known constraints, and the plan/design surface being grilled.
 2. Identify decision branches and separate them into:
-   - repo-answerable facts for `forge-worker`
+   - repo-answerable facts for `forge-seeker`
    - user-owned decisions for the `question` tool
    - safe assumptions that can be stated and revisited
-3. Delegate repo-answerable inspection before asking the user about the same branch.
+3. Delegate repo-answerable inspection to `forge-seeker` before asking the user about the same branch.
 4. Ask small batches of user-owned questions with a recommended answer for each.
-5. After each batch or worker result, update the decision tree and resolve dependent branches.
-6. Stop when the remaining unknowns are either resolved, explicitly accepted as risks, or safely deferred.
+5. After each batch or seeker result, update the decision tree and resolve dependent branches.
+6. Re-dispatch `forge-planner` once with the full set of findings (user answers plus seeker evidence); it re-emits the complete `PLAN`, never a diff. Do not revise the plan inline.
+7. Stop when the remaining unknowns are either resolved, explicitly accepted as risks, or safely deferred.
 
 ## Output style to the user
 

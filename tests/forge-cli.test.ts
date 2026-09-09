@@ -663,7 +663,7 @@ test('install keeps non-interactive defaults when no flags are provided', async 
 test('install uses bundled Forge sources when --source is omitted', async () => {
   const output = await captureConsole(() => main(['install', '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
+  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/using-forge\/SKILL\.md/);
 });
@@ -1108,7 +1108,7 @@ test('configure changes only the targeted artifact, updates the manifest, and su
 
     const configured = await captureConsole(() => main(['configure', '--scope', 'user', '--platform', 'claude', '--model-map', 'forge=haiku'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
     assert.equal(configured.code, 0);
-    assert.match(configured.stdout, /Updated 6 file\(s\) with new model preferences/);
+    assert.match(configured.stdout, /Updated 8 file\(s\) with new model preferences/);
     assert.match(await readFile(path.join(home, '.claude', 'agents', 'forge.md'), 'utf8'), /^model: haiku$/m);
 
     // A later plain `update` must not silently reset the chosen model back to the canonical default.
@@ -1237,18 +1237,20 @@ test('manifest checksum reflects on-disk content, not pre-write content', async 
 
 test('discovers and dry-runs all bundled Forge artifacts', async () => {
   const root = process.cwd();
-  const expected = ['forge', 'forge-worker', 'forge-worker-leaf', 'using-forge', 'forge-grill', 'forge-adversary'];
+  const expected = ['forge', 'forge-worker', 'forge-worker-leaf', 'using-forge', 'forge-grill', 'forge-adversary', 'forge-seeker', 'forge-planner'];
   const discovered = await discoverSources(root);
   assert.equal(discovered.diagnostics.filter((item) => item.severity === 'error').length, 0);
   assert.deepEqual(new Set(discovered.sources.map((source) => source.expectedName)), new Set(expected));
 
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
+  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-worker\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-adversary\.md/);
+  assert.match(output.stdout, /\.opencode\/agents\/forge-seeker\.md/);
+  assert.match(output.stdout, /\.opencode\/agents\/forge-planner\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/using-forge\/SKILL\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/forge-grill\/SKILL\.md/);
 });
@@ -1257,28 +1259,31 @@ test('bundled forge artifact installs as a real Claude subagent with a structura
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
+  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
   assert.match(output.stdout, /claude agent forge -> .*\.claude\/agents\/forge\.md/);
   assert.doesNotMatch(output.stdout, /\.claude\/skills\/forge\/SKILL\.md/);
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
   assert.match(output.stdout, /claude agent forge-worker-leaf -> .*\.claude\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /claude agent forge-adversary -> .*\.claude\/agents\/forge-adversary\.md/);
+  assert.match(output.stdout, /claude agent forge-seeker -> .*\.claude\/agents\/forge-seeker\.md/);
+  assert.match(output.stdout, /claude agent forge-planner -> .*\.claude\/agents\/forge-planner\.md/);
   assert.doesNotMatch(output.stdout, /CLAUDE_UNKNOWN_TOOL/);
+  assert.doesNotMatch(output.stdout, /CLAUDE_UNKNOWN_MODEL/);
   assert.doesNotMatch(output.stdout, /CLAUDE_AGENT_TOOLS_IGNORED/);
 
   const { artifacts } = await discoverArtifacts(root);
   const forge = artifacts.find((item) => item.name === 'forge')!;
   const rendered = renderClaudeAgent(forge);
-  assert.match(rendered.content, /tools: Agent\(forge-worker, forge-adversary\), TodoWrite, Skill, AskUserQuestion/);
+  assert.match(rendered.content, /tools: Agent\(forge-worker, forge-adversary, forge-seeker, forge-planner\), TodoWrite, Skill, AskUserQuestion/);
   assert.equal(rendered.diagnostics.length, 0);
 });
 
-test('bundled Forge direct Codex install includes all six canonical artifacts and diagnostics', async () => {
+test('bundled Forge direct Codex install includes all eight canonical artifacts and diagnostics', async () => {
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'codex', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
-  for (const name of ['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary']) {
+  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
+  for (const name of ['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary', 'forge-seeker', 'forge-planner']) {
     assert.ok(output.stdout.includes(`codex agent ${name} -> ${path.join(root, '.codex', 'agents', `${name}.toml`)}`));
   }
   for (const name of ['using-forge', 'forge-grill']) {
@@ -1319,7 +1324,7 @@ test('conformance: forge cannot execute directly on every platform that claims s
   // frontmatter's `tools:` line, not the whole body — body prose legitimately says things like
   // "Read .forge/lessons.md" in English, which isn't a tool grant.
   const claudeToolsLine = forgeClaude.split('\n').find((line) => line.startsWith('tools:')) ?? '';
-  assert.match(claudeToolsLine, /^tools: Agent\(forge-worker, forge-adversary\), TodoWrite, Skill, AskUserQuestion$/);
+  assert.match(claudeToolsLine, /^tools: Agent\(forge-worker, forge-adversary, forge-seeker, forge-planner\), TodoWrite, Skill, AskUserQuestion$/);
   for (const tool of ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep', 'LS', 'WebFetch']) {
     assert.doesNotMatch(claudeToolsLine, new RegExp(`\\b${tool}\\b`), `forge (Claude) must not be granted ${tool}`);
   }
@@ -1340,10 +1345,67 @@ test('conformance: forge cannot execute directly on every platform that claims s
   assert.doesNotMatch(forgeGrok, /disallowedTools|tools:/);
 });
 
+// Conformance for the two read-only agents (.forge/seeker-planner-agents/design.md §5): asserts on
+// RENDERED output per platform so a canonical frontmatter change that an adapter silently drops
+// (or a body edit that grants a tool in prose) cannot widen either agent's posture unnoticed.
+test('conformance: forge-seeker and forge-planner are read-only and non-spawning on every platform', async () => {
+  const root = process.cwd();
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  const find = (platform: string, name: string) => plan.files.find((f) => f.platform === platform && f.name === name)?.content ?? '';
+  const toolsLine = (content: string) => content.split('\n').find((line) => line.startsWith('tools:')) ?? '';
+
+  for (const name of ['forge-seeker', 'forge-planner']) {
+    // Claude: structural tools allowlist — no write, edit, exec, or spawn tool on the `tools:` line.
+    const claudeTools = toolsLine(find('claude', name));
+    assert.ok(claudeTools.length > 0, `${name} (Claude) must declare a tools allowlist`);
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Agent', 'Task']) {
+      assert.doesNotMatch(claudeTools, new RegExp(`\\b${tool}\\b`), `${name} (Claude) must not be granted ${tool}`);
+    }
+    assert.match(claudeTools, /\bRead\b/, `${name} (Claude) must be able to Read`);
+
+    // OpenCode: structural permission denies for every mutating or spawning tool.
+    const opencode = find('opencode', name);
+    assert.match(opencode, /mode: subagent/, `${name} (OpenCode) must be a subagent`);
+    for (const tool of ['write', 'edit', 'bash', 'patch', 'task']) {
+      assert.match(opencode, new RegExp(`${tool}: deny`), `${name} (OpenCode) must deny ${tool}`);
+    }
+    assert.match(opencode, /read: allow/, `${name} (OpenCode) must allow read`);
+
+    // Codex: read-only sandbox, plus the declared "still executes commands" caveat (design.md D11) —
+    // present on Codex and nowhere else (the whole-line snippet resolves to '' on other platforms).
+    const codex = find('codex', name);
+    assert.match(codex, /sandbox_mode = "read-only"/, `${name} (Codex) must be read-only`);
+    assert.match(codex, /sandbox still executes commands/, `${name} (Codex) must declare the advisory gap`);
+    for (const platform of ['claude', 'opencode', 'grok']) {
+      assert.doesNotMatch(find(platform, name), /sandbox still executes commands/, `${name} (${platform}) must not carry the Codex-only note`);
+    }
+
+    // Grok: structural tools list — no write/exec/spawn ids.
+    const grok = find('grok', name);
+    for (const tool of ['search_replace', 'run_terminal_cmd', 'bash', 'task']) {
+      assert.doesNotMatch(grok, new RegExp(`^\\s*- ${tool}$`, 'm'), `${name} (Grok) must not be granted ${tool}`);
+    }
+    assert.match(grok, /^\s*- read_file$/m, `${name} (Grok) must be able to read_file`);
+  }
+
+  // Seeker may fetch the web (design.md D5); the planner may not (D2).
+  assert.match(toolsLine(find('claude', 'forge-seeker')), /\bWebFetch\b/);
+  assert.doesNotMatch(toolsLine(find('claude', 'forge-planner')), /\bWebFetch\b/);
+  assert.match(find('opencode', 'forge-seeker'), /webfetch: allow/);
+  assert.match(find('opencode', 'forge-planner'), /webfetch: deny/);
+  assert.match(find('grok', 'forge-seeker'), /^\s*- web_fetch$/m);
+  assert.doesNotMatch(find('grok', 'forge-planner'), /^\s*- web_fetch$/m);
+
+  // The orchestrator can reach both new agents; the coordinator can still reach the seeker.
+  assert.match(toolsLine(find('claude', 'forge')), /^tools: Agent\(forge-worker, forge-adversary, forge-seeker, forge-planner\), TodoWrite, Skill, AskUserQuestion$/);
+  assert.match(find('opencode', 'forge'), /task: allow/);
+  assert.match(find('opencode', 'forge-worker'), /task: allow/);
+});
+
 test('conformance: every cross-referenced artifact name in every rendered body resolves to a real installed artifact, per platform', async () => {
   const root = process.cwd();
   const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
-  const canonicalNames = new Set(['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary', 'using-forge', 'forge-grill']);
+  const canonicalNames = new Set(['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary', 'using-forge', 'forge-grill', 'forge-seeker', 'forge-planner']);
   const namePattern = new RegExp(`\\b(${[...canonicalNames].join('|')})\\b`, 'g');
 
   for (const platform of ['claude', 'opencode', 'codex', 'grok'] as const) {
@@ -1386,10 +1448,12 @@ test('conformance: forge-worker names only its own platform\'s spawn tool, never
   for (const [platform, tool] of Object.entries(spawnToolByPlatform)) {
     const content = plan.files.find((f) => f.platform === platform && f.name === 'forge-worker')!.content;
     assert.match(content, new RegExp(`Spawn \`forge-worker-leaf\` via \`${tool}\``));
+    assert.match(content, new RegExp(`Spawn \`forge-seeker\` via \`${tool}\``));
   }
   const codexContent = plan.files.find((f) => f.platform === 'codex' && f.name === 'forge-worker')!.content;
   assert.match(codexContent, /Return `DELEGATION_REQUESTS`/);
-  assert.doesNotMatch(codexContent, /Spawn `forge-worker-leaf` via `(Agent|task)`/);
+  assert.match(codexContent, /Return `DELEGATION_REQUESTS` with `role: seeker`/);
+  assert.doesNotMatch(codexContent, /Spawn `forge-(worker-leaf|seeker)` via `(Agent|task)`/);
 });
 
 test('no policy-class dispatch snippet diverges across platforms', () => {
@@ -1405,12 +1469,15 @@ test('bundled forge artifact installs as a Grok skill, with worker and adversary
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'grok', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 6 source\(s\), 6 output\(s\)/);
+  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
   assert.match(output.stdout, /grok skill forge -> .*\.grok\/skills\/forge\/SKILL\.md/);
   assert.doesNotMatch(output.stdout, /\.grok\/agents\/forge\.md/);
   assert.match(output.stdout, /grok agent forge-worker -> .*\.grok\/agents\/forge-worker\.md/);
   assert.match(output.stdout, /grok agent forge-worker-leaf -> .*\.grok\/agents\/forge-worker-leaf\.md/);
   assert.match(output.stdout, /grok agent forge-adversary -> .*\.grok\/agents\/forge-adversary\.md/);
+  assert.match(output.stdout, /grok agent forge-seeker -> .*\.grok\/agents\/forge-seeker\.md/);
+  assert.match(output.stdout, /grok agent forge-planner -> .*\.grok\/agents\/forge-planner\.md/);
+  assert.doesNotMatch(output.stdout, /GROK_UNKNOWN_(TOOL|MODEL)/);
   assert.match(output.stdout, /grok skill forge-grill -> .*\.grok\/skills\/forge-grill\/SKILL\.md/);
   assert.match(output.stdout, /grok skill using-forge -> .*\.grok\/skills\/using-forge\/SKILL\.md/);
 });

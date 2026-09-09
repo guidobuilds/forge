@@ -9,6 +9,43 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+### Added
+
+- **`forge-seeker`** — a cheap, read-only evidence collector (Claude `haiku`, Grok
+  `grok-composer-2.5-fast`, Codex `gpt-5.4-mini`; OpenCode inherits the session model) with
+  read/glob/grep/list plus web fetch and nothing else: no write, edit, execute, or spawn on any
+  platform. It returns typed evidence (`map:` / `evidence:` / `unknown:`), never conclusions — its
+  payload is its product, since it cannot write `explore.md`. `forge` dispatches it for wide
+  `inspect` and for `forge-grill` fact-finding; `forge-worker` spawns it for read-only shards instead
+  of `forge-worker-leaf`. Why: effort routing only *advised* "inspect = low"; this makes the cheap,
+  read-only posture structural.
+- **`forge-planner`** — the design and planning brain (Claude `opus`, Grok `grok-build-plan`;
+  Codex/OpenCode inherit) with read/glob/grep/list only. It owns non-trivial `design`/`plan`,
+  records every decision with its losing options, and returns a new contract section, **`PLAN:`**
+  (fenced JSON in the `feature-list.json` schema). It cannot write: `forge` relays `PLAN` verbatim
+  into the pre-build approval brief, and the first build dispatch persists it under `.forge/<slug>/`
+  before editing code. Why read-only rather than tool-less: Claude Code refuses to launch a subagent
+  whose `tools` resolve to nothing, and `forge` cannot read, so a tool-less planner would have no
+  path to context. Trivial design/plan may still be decided inline by `forge-worker`.
+- Conformance test locking both agents' read-only / non-spawning posture on every platform against
+  rendered output (seeker-only web fetch, Codex-only "read-only sandbox still executes commands"
+  caveat), plus golden fixtures for the two artifacts (32 total).
+- Mechanism-class dispatch snippets `worker-spawn-seeker-instruction` and `read-only-sandbox-note`.
+
+### Changed
+
+- `forge`'s Claude allowlist is now `Agent(forge-worker, forge-adversary, forge-seeker, forge-planner)`;
+  its description no longer claims "a single worker type".
+- `forge-worker` keeps `design`/`plan` only for trivial `mixed` runs and escalates build-shaping
+  decisions on non-trivial work via `NEXT_RECOMMENDED: design|plan`; build mode persists a relayed
+  `PLAN` first; sub-delegation routes read-only shards to `forge-seeker` and write shards to
+  `forge-worker-leaf`.
+- `using-forge` effort routing names the default agent per level (low → `forge-seeker`, medium →
+  `forge-worker`, high → `forge-planner`), the depth table lists the terminal agents, and the worker
+  contract's `DELEGATION_REQUESTS … role:` accepts `leaf|seeker`.
+- `forge-grill` sends repo-answerable branches to `forge-seeker` (was `forge-worker`) and revises
+  the plan through one `forge-planner` re-dispatch per answered batch (full `PLAN`, never a diff).
+
 ## [0.9.0] - 2026-09-05
 
 ### Added
