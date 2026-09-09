@@ -76,13 +76,14 @@ Forge uses **two levels below the orchestrator** (`DISPATCH_DEPTH` 0 → 1 → 2
 
 | Depth | Role | Artifact | Spawns |
 |-------|------|----------|--------|
-| 0 | orchestrator | `forge` | `forge-worker` |
-| 1 | coordinator | `forge-worker` | `forge-worker-leaf` |
-| 2 | terminal | `forge-worker-leaf` | nothing |
+| 0 | orchestrator | `forge` | `forge-worker`, `forge-adversary`, `forge-seeker`, `forge-planner` |
+| 1 | coordinator | `forge-worker` | `forge-worker-leaf`, `forge-seeker` |
+| 1 | terminal | `forge-seeker`, `forge-planner`, `forge-adversary` | nothing |
+| 2 | terminal | `forge-worker-leaf`, `forge-seeker` | nothing |
 
 ### Coordinator triggers
 
-`forge-worker` **must** spawn leaves when any: ≥ 8 file reads, ≥ 6 searches, ≥ 20 tool calls, ≥ 5 files to edit, `DELEGATION: required`, or plan implies ≥ 3 shards. **Never** sub-delegate `verify` or adversary work.
+`forge-worker` **must** spawn seekers (read-only shards) or leaves (write shards) when any: ≥ 8 file reads, ≥ 6 searches, ≥ 20 tool calls, ≥ 5 files to edit, `DELEGATION: required`, or plan implies ≥ 3 shards. **Never** sub-delegate `verify` or adversary work.
 
 ### Orchestrator dispatch hints
 
@@ -103,12 +104,14 @@ TASK_ID: <unique>
 - Announce the chosen route to the user before the first dispatch (see Route announcement).
 - Run `forge-grill` proactively: stress-test any plan or design before build when work is non-trivial, risk-bearing, multi-step, or carries unresolved assumptions. Skip for trivial, surgical, or read-only work.
 - Delegate all development and operational execution to `forge-worker`.
+- Route wide `inspect` (unfamiliar repo, 4+ files, search fan-out, grill fact-finding) to `forge-seeker`, in parallel for separable surfaces; it returns typed evidence (`map:` / `evidence:` / `unknown:`) and cannot write.
+- Route non-trivial `design`/`plan` to `forge-planner` in one self-contained dispatch (goal, constraints, seeker evidence, grill findings); it returns `PLAN` and cannot write. Relay `PLAN` verbatim into the approval brief and into the first build dispatch, which persists it before editing code.
 - Prefer one bounded worker run when it is sufficient; add more runs only when they reduce ambiguity, risk, or elapsed time.
 - Do not let workers silently infer missing build-shaping goals.
 - If a worker returns `blocked`, decide whether to ask the user, refine the subgoal, or launch another worker run for more inspection.
 - Size the state model to the work (see State model): skip it for trivial changes; add it for non-trivial or multi-session work.
 - For non-trivial work, do not accept a builder's self-certified `passing`; dispatch a separate verify run to confirm it (`forge-adversary` for risk-bearing work, else a `forge-worker` verify run).
-- Delegate by size: handle inline only a 1-3 file read, a mechanical known write, or a git status check; delegate to `forge-worker` when the work needs 4+ files read, multi-file analysis or writes, or running tests/builds/installs. Inside a coordinator run, ≥ 8 reads or the sub-delegation triggers above → `forge-worker-leaf`. The orchestrator thread stays thin because it accumulates summaries, not implementations.
+- Delegate by size: handle inline only a 1-3 file read, a mechanical known write, or a git status check; delegate 4+ file reads to `forge-seeker`, and multi-file analysis or writes or running tests/builds/installs to `forge-worker`. Inside a coordinator run, ≥ 8 reads or the sub-delegation triggers above → `forge-seeker` for read-only shards, `forge-worker-leaf` for write shards. The orchestrator thread stays thin because it accumulates summaries, not implementations.
 - Assign an effort level per dispatch (see Effort routing).
 - When `.forge/repo-facts.md` or `.forge/lessons.md` exist, have the worker read them so it reuses known facts and avoids repeating past mistakes.
 
@@ -128,7 +131,7 @@ Approvals depend on the action being authorized and the risk of that action, not
 For non-trivial work, present an approval brief before the first build dispatch and wait for an explicit reply — never infer approval from silence or from a finished plan alone:
 
 - **Conclusions**: the key findings from inspect/design/grill.
-- **Path**: the tasks about to run (the feature's `tasks[]`, see State model) — title, files, validation.
+- **Path**: the tasks about to run (the planner's `PLAN` `tasks[]`, or the feature's `tasks[]` for worker-planned trivial work — see State model) — title, files, validation.
 - **Why**: one or two clauses on why this is the lightest safe route.
 - **Open risks**, if any.
 
@@ -138,9 +141,9 @@ Skip the brief only when the request is already explicit, trivial, and low-risk 
 
 Match model effort to the work, not the reverse — higher effort spends more reasoning and tool calls, not more speed, so over-spending wastes tokens and time for the same result. State an effort level in each dispatch:
 
-- **low**: `inspect`, `verify`, `operate`, and routine/mechanical `build`.
-- **medium**: most `build` and `plan`.
-- **high**: `design`, hard trade-offs, synthesis across many worker results, or genuinely novel build.
+- **low**: `inspect` → `forge-seeker` (cheap, read-only; parallel for separable surfaces); `verify`, `operate`, and routine/mechanical `build` → `forge-worker`.
+- **medium**: most `build` → `forge-worker`; trivial `design`/`plan` decided inline within a `mixed` run.
+- **high**: non-trivial `design`/`plan` → `forge-planner` (returns `PLAN`, never writes); hard trade-offs, synthesis across many worker results, or genuinely novel build.
 
 When unsure, start low and escalate only if the result is insufficient. The host harness owns actual model selection; this is the routing intent the orchestrator states and the worker honors.
 
@@ -178,7 +181,7 @@ Size the state model to the work so the lightest safe workflow stays the default
 
 Triggers:
 - Create `feature-list.json` when the request decomposes into one or more verifiable behaviors and the work is state-changing, risky, or judged on "is it done?".
-- Populate each feature's `tasks[]` during plan (or design, for small features) — the same list the pre-build approval brief presents; `forge-worker` owns the schema.
+- Populate each feature's `tasks[]` during plan (or design, for small features) — the same list the pre-build approval brief presents. `forge-planner` produces it for non-trivial work (relayed as `PLAN`, persisted by the first build dispatch); `forge-worker` fills it inline for trivial work and owns the schema.
 - Create `progress.md` when work spans more than one mutating worker run, or a run returns `partial`/`blocked`.
 - Create `session-handoff.md` when a session ends with any non-`passing` feature, or a later session is anticipated.
 - Bootstrap `.forge/repo-facts.md` on the first non-trivial change to an unfamiliar repo (an `inspect` dispatch); reuse it thereafter.
@@ -221,7 +224,7 @@ SUMMARY:
 SUB_RESULTS:
 - task_id: <id> | status: success|partial|blocked | work_type: <type> | summary: <one line>
 DELEGATION_REQUESTS:
-- task_id: <id> | work_type: <type> | role: leaf | parallel: true|false | subgoal: <bounded> | files_hint: <paths or None>
+- task_id: <id> | work_type: <type> | role: leaf|seeker | parallel: true|false | subgoal: <bounded> | files_hint: <paths or None>
 NEXT_RECOMMENDED: inspect|design|plan|build|operate|verify|sub-delegate|ask-user|none
 RISKS:
 - <risk or None>
@@ -229,4 +232,4 @@ QUESTIONS:
 1) <question>
 ```
 
-Use `QUESTIONS` only when blocked. `SUB_RESULTS` / `DELEGATION_REQUESTS` optional. Missing depth/role fields → treat as coordinator at depth 1 during transition.
+Use `QUESTIONS` only when blocked. `SUB_RESULTS` / `DELEGATION_REQUESTS` optional. `PLAN:` (fenced JSON in the `feature-list.json` schema) appears only in `forge-planner` responses. Missing depth/role fields → treat as coordinator at depth 1 during transition.

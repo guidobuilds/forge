@@ -141,10 +141,12 @@ Forge installs the **same operating model** on every agent, but **how you invoke
 
 ### The pieces
 
-Forge is one orchestrator, a two-tier worker model, and a dedicated adversary, with two supporting skills:
+Forge is one orchestrator, a read-only seeker, a think-only planner, a two-tier worker model, and a dedicated adversary, with two supporting skills:
 
 - **`forge`** — the orchestrator. It talks to you, decides how much process a task needs, and delegates the real work. It does not edit code itself.
-- **`forge-worker`** — the coordinator worker. It executes bounded subgoals and spawns `forge-worker-leaf` when context would grow too large (~100k-token peak).
+- **`forge-seeker`** — the collector. A cheap, fast, read-only agent (`haiku` on Claude Code) that maps the repo, searches, fetches docs, and returns typed evidence (`map:` / `evidence:` / `unknown:`) — facts, not conclusions. `forge` dispatches it for wide inspection and `forge-worker` for read-only shards; it cannot write, execute, or spawn.
+- **`forge-planner`** — the brain. The most capable model (`opus` on Claude Code) spent on design and planning for non-trivial work. It reads, thinks, records every decision with its losing options, and returns a `PLAN` (the `feature-list.json` content the approval brief presents). It cannot write, execute, or spawn — the first build dispatch persists the plan.
+- **`forge-worker`** — the coordinator worker. It executes bounded subgoals and spawns `forge-seeker` (read-only shards) or `forge-worker-leaf` (write shards) when context would grow too large (~100k-token peak). It still decides trivial design/plan inline; non-trivial design/plan goes to `forge-planner`.
 - **`forge-worker-leaf`** — the terminal worker. It runs one bounded shard with no sub-delegation.
 - **`forge-adversary`** — the breaker. After a build, the orchestrator dispatches it to *try to break* the work — logically and technically (logic/requirements, runtime, security, performance). It gates the Definition of Done: a confirmed, reproducible break keeps the feature out of `passing`. It complements `forge-grill`, which grills plans *before* building.
 - **`using-forge`** — the shared operating-model skill the orchestrator follows.
@@ -159,11 +161,13 @@ What changes per platform is the **kind** each piece is installed as, and theref
 | `forge` | subagent (`model: opus`, structural `tools` allowlist) | mention it by name, `@forge`, or `claude --agent forge` |
 | `forge-grill` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before non-trivial or risk-bearing builds |
 | `using-forge` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before routing work |
-| `forge-worker` | subagent | coordinator; `forge` delegates via `Agent(forge-worker, forge-adversary)` |
+| `forge-seeker` | subagent (`model: haiku`, read-only tools + `WebFetch`) | `forge` dispatches it for wide inspection and grill fact-finding; `forge-worker` for read-only shards |
+| `forge-planner` | subagent (`model: opus`, read-only tools) | `forge` dispatches it for non-trivial design/plan; it returns a `PLAN` the first build persists |
+| `forge-worker` | subagent | coordinator; `forge` delegates via `Agent(forge-worker, forge-adversary, forge-seeker, forge-planner)` |
 | `forge-worker-leaf` | subagent | terminal shard; spawned by `forge-worker` (or orchestrator on Codex) |
 | `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
 
-`forge` installs as a real Claude Code subagent with a structural `tools` allowlist (`Agent(forge-worker, forge-adversary)`, `TodoWrite`, `Skill`, `AskUserQuestion`) — it cannot Read/Write/Edit/Bash itself, only dispatch. It loads `using-forge` and `forge-grill` via the `Skill` tool and can still ask you clarifying questions directly (`AskUserQuestion` is retained for an agent running as the session's main driver, unlike a bounded sub-task dispatch). Requires **Claude Code v2.1.172+**.
+`forge` installs as a real Claude Code subagent with a structural `tools` allowlist (`Agent(forge-worker, forge-adversary, forge-seeker, forge-planner)`, `TodoWrite`, `Skill`, `AskUserQuestion`) — it cannot Read/Write/Edit/Bash itself, only dispatch. `forge-seeker` and `forge-planner` carry their own structural allowlists (`Read`, `Glob`, `Grep`, `LS`, plus `WebFetch` for the seeker) — neither can write, execute, or spawn. It loads `using-forge` and `forge-grill` via the `Skill` tool and can still ask you clarifying questions directly (`AskUserQuestion` is retained for an agent running as the session's main driver, unlike a bounded sub-task dispatch). Requires **Claude Code v2.1.172+**.
 
 To make `forge` the automatic default for a project (equivalent to the old `/forge` auto-load), add to `.claude/settings.json`:
 
@@ -178,6 +182,8 @@ Without that, invoke it explicitly per session (mention it by name, `@forge`, or
 | Piece | Installed as | How you invoke it |
 |---|---|---|
 | `forge` | primary agent | switch your active agent to `forge` |
+| `forge-seeker` | subagent | read/glob/grep/list/webfetch allowed, everything else denied; dispatched via `task` for read-only fact-finding |
+| `forge-planner` | subagent | read/glob/grep/list allowed, everything else denied; dispatched via `task` for non-trivial design/plan |
 | `forge-worker` | subagent | coordinator; `forge` delegates with `task: allow` |
 | `forge-worker-leaf` | subagent | terminal shard; spawned by coordinator (`task: deny`) |
 | `forge-adversary` | subagent | the `forge` agent delegates to it to gate risk-bearing work after build |
@@ -189,10 +195,10 @@ Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator h
 
 | Piece | Installed as | Location |
 |---|---|---|
-| `forge`, `forge-worker`, `forge-worker-leaf`, `forge-adversary` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
+| `forge`, `forge-worker`, `forge-worker-leaf`, `forge-adversary`, `forge-seeker`, `forge-planner` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
 | `using-forge`, `forge-grill` | skills | `~/.agents/skills/` (or `.agents/skills/` per project) |
 
-The CLI writes agent `.toml` files but does not generate `AGENTS.md` or profiles.
+The CLI writes agent `.toml` files but does not generate `AGENTS.md` or profiles. `forge-seeker` and `forge-planner` run with `sandbox_mode = "read-only"`; a read-only Codex sandbox still executes commands, so their no-execution rule is stated in their own installed prose rather than enforced by the harness.
 
 ### Project vs user scope
 
@@ -203,6 +209,8 @@ The CLI writes agent `.toml` files but does not generate `AGENTS.md` or profiles
 | `forge` | skill | type `/forge` in the prompt |
 | `forge-grill` | skill | type `/forge-grill` |
 | `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
+| `forge-seeker` | subagent (`model: grok-composer-2.5-fast`, read-only tools) | main thread or `forge-worker` delegates via `task` for read-only fact-finding |
+| `forge-planner` | subagent (`model: grok-build-plan`, read-only tools) | main thread delegates via `task` for non-trivial design/plan |
 | `forge-worker` | subagent | coordinator; main thread delegates via `task` |
 | `forge-worker-leaf` | subagent | terminal shard; spawned by coordinator |
 | `forge-adversary` | subagent | the orchestrator delegates to it after build to gate risk-bearing work |
