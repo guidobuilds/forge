@@ -9,6 +9,16 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+### Changed
+
+- **The orchestrator never shows the user JSON.** `PLAN` / `feature-list.json` are now explicitly
+  internal wire formats. Whenever a plan, feature, or task list reaches the user (pre-build approval
+  brief, grill summary, progress update, re-presented path), `forge` renders it as a terse
+  human-readable numbered list (`title — files — validation`) — never a fenced JSON block, raw schema
+  keys, or a field-by-field dump. The "relay `PLAN` verbatim" wording in `forge`, `using-forge`, and
+  `forge-planner` now applies only to the first build dispatch (which persists the JSON), not to the
+  approval brief.
+
 ## [0.10.0] - 2026-09-09
 
 ### Added

@@ -101,4 +101,4 @@ QUESTIONS:
 1) <user-owned decision> — recommended: <answer> because <why>
 ```
 
-`PLAN` uses exactly the `feature-list.json` schema `forge-worker` owns; omit the section when the round was design-only and no plan was requested. `ARTIFACTS` is always `- None`: you cannot write — the orchestrator relays `PLAN` verbatim into the pre-build approval brief, and the first build dispatch persists it under `.forge/<feature-slug>/`. Include `QUESTIONS` only when `STATUS: blocked` on a user-owned decision. Never include `SUB_RESULTS` or `DELEGATION_REQUESTS`.
+`PLAN` uses exactly the `feature-list.json` schema `forge-worker` owns; omit the section when the round was design-only and no plan was requested. `ARTIFACTS` is always `- None`: you cannot write — the orchestrator relays `PLAN` verbatim into the first build dispatch, which persists it under `.forge/<feature-slug>/`, and renders its `tasks[]` to the user as a human-readable list (never JSON) in the pre-build approval brief. Include `QUESTIONS` only when `STATUS: blocked` on a user-owned decision. Never include `SUB_RESULTS` or `DELEGATION_REQUESTS`.
