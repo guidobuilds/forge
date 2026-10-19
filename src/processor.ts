@@ -24,7 +24,10 @@ const allowedClaudeKeys = new Set([...allowedProductKeys, 'when_to_use', 'user-i
 const openCodeModes = new Set<OpenCodeMode>(['primary', 'subagent', 'all']);
 const artifactKinds = new Set<SourceKind>(['agent', 'skill']);
 const defaultBodyBudget = 200;
-const bodyLineBudgets: Record<string, number> = { forge: 90, 'using-forge': 240, 'forge-worker': 340, 'forge-worker-leaf': 280, 'forge-grill': 120, 'forge-adversary': 200 };
+// Per-artifact soft budgets. `forge-change-report` is deliberately above the default 200: it is an
+// on-demand skill (hand-loaded at build closure, not always-loaded), and it must carry the whole
+// self-contained HTML template inline because Forge does not install support files alongside a skill.
+const bodyLineBudgets: Record<string, number> = { forge: 90, 'using-forge': 240, 'forge-worker': 340, 'forge-worker-leaf': 280, 'forge-grill': 120, 'forge-adversary': 200, 'forge-change-report': 380 };
 
 export type ProcessOptions = {
   source: string;

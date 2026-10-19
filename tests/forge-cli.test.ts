@@ -663,7 +663,7 @@ test('install keeps non-interactive defaults when no flags are provided', async 
 test('install uses bundled Forge sources when --source is omitted', async () => {
   const output = await captureConsole(() => main(['install', '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
+  assert.match(output.stdout, /install: 10 source\(s\), 10 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/skills\/using-forge\/SKILL\.md/);
 });
@@ -1108,7 +1108,7 @@ test('configure changes only the targeted artifact, updates the manifest, and su
 
     const configured = await captureConsole(() => main(['configure', '--scope', 'user', '--platform', 'claude', '--model-map', 'forge=haiku'], { isInteractive: false, env: { HOME: home } as NodeJS.ProcessEnv }));
     assert.equal(configured.code, 0);
-    assert.match(configured.stdout, /Updated 8 file\(s\) with new model preferences/);
+    assert.match(configured.stdout, /Updated 10 file\(s\) with new model preferences/);
     assert.match(await readFile(path.join(home, '.claude', 'agents', 'forge.md'), 'utf8'), /^model: haiku$/m);
 
     // A later plain `update` must not silently reset the chosen model back to the canonical default.
@@ -1237,14 +1237,14 @@ test('manifest checksum reflects on-disk content, not pre-write content', async 
 
 test('discovers and dry-runs all bundled Forge artifacts', async () => {
   const root = process.cwd();
-  const expected = ['forge', 'forge-worker', 'forge-worker-leaf', 'using-forge', 'forge-grill', 'forge-adversary', 'forge-seeker', 'forge-planner'];
+  const expected = ['forge', 'forge-worker', 'forge-worker-leaf', 'using-forge', 'forge-grill', 'forge-adversary', 'forge-seeker', 'forge-planner', 'forge-change-report', 'forge-diagramming'];
   const discovered = await discoverSources(root);
   assert.equal(discovered.diagnostics.filter((item) => item.severity === 'error').length, 0);
   assert.deepEqual(new Set(discovered.sources.map((source) => source.expectedName)), new Set(expected));
 
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'opencode', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
+  assert.match(output.stdout, /install: 10 source\(s\), 10 output\(s\)/);
   assert.match(output.stdout, /\.opencode\/agents\/forge\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-worker\.md/);
   assert.match(output.stdout, /\.opencode\/agents\/forge-worker-leaf\.md/);
@@ -1259,7 +1259,7 @@ test('bundled forge artifact installs as a real Claude subagent with a structura
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'claude', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
+  assert.match(output.stdout, /install: 10 source\(s\), 10 output\(s\)/);
   assert.match(output.stdout, /claude agent forge -> .*\.claude\/agents\/forge\.md/);
   assert.doesNotMatch(output.stdout, /\.claude\/skills\/forge\/SKILL\.md/);
   assert.match(output.stdout, /claude agent forge-worker -> .*\.claude\/agents\/forge-worker\.md/);
@@ -1278,11 +1278,11 @@ test('bundled forge artifact installs as a real Claude subagent with a structura
   assert.equal(rendered.diagnostics.length, 0);
 });
 
-test('bundled Forge direct Codex install includes all eight canonical artifacts and diagnostics', async () => {
+test('bundled Forge direct Codex install includes all ten canonical artifacts and diagnostics', async () => {
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'codex', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
+  assert.match(output.stdout, /install: 10 source\(s\), 10 output\(s\)/);
   for (const name of ['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary', 'forge-seeker', 'forge-planner']) {
     assert.ok(output.stdout.includes(`codex agent ${name} -> ${path.join(root, '.codex', 'agents', `${name}.toml`)}`));
   }
@@ -1405,7 +1405,7 @@ test('conformance: forge-seeker and forge-planner are read-only and non-spawning
 test('conformance: every cross-referenced artifact name in every rendered body resolves to a real installed artifact, per platform', async () => {
   const root = process.cwd();
   const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
-  const canonicalNames = new Set(['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary', 'using-forge', 'forge-grill', 'forge-seeker', 'forge-planner']);
+  const canonicalNames = new Set(['forge', 'forge-worker', 'forge-worker-leaf', 'forge-adversary', 'using-forge', 'forge-grill', 'forge-seeker', 'forge-planner', 'forge-change-report', 'forge-diagramming']);
   const namePattern = new RegExp(`\\b(${[...canonicalNames].join('|')})\\b`, 'g');
 
   for (const platform of ['claude', 'opencode', 'codex', 'grok'] as const) {
@@ -1417,6 +1417,66 @@ test('conformance: every cross-referenced artifact name in every rendered body r
       }
     }
   }
+});
+
+// Conformance for the change-report mandate (.forge/gui-300-architectural-handoff): asserts on
+// RENDERED output so a canonical prose edit an adapter silently drops can't ship an unenforced
+// trigger, and that the new skill installs as a background-only skill on every platform.
+test('conformance: the change report is mandated in rendered prose and installs as a skill', async () => {
+  const root = process.cwd();
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  const find = (platform: string, name: string) => plan.files.find((f) => f.platform === platform && f.name === name)?.content ?? '';
+
+  for (const platform of ['claude', 'opencode', 'codex', 'grok'] as const) {
+    const worker = find(platform, 'forge-worker');
+    assert.match(worker, /forge-change-report/, `${platform} forge-worker must reference the skill`);
+    assert.match(worker, /change-report\.html/, `${platform} forge-worker must name the report path`);
+    assert.match(worker, /partial`\/`blocked/, `${platform} forge-worker must require the report on partial/blocked`);
+
+    const usingForge = find(platform, 'using-forge');
+    assert.match(usingForge, /change-report\.html/, `${platform} using-forge must list the report artifact`);
+    assert.match(usingForge, /forge-change-report/, `${platform} using-forge must name the skill for the trigger`);
+
+    const skill = plan.files.find((f) => f.platform === platform && f.name === 'forge-change-report');
+    assert.ok(skill, `forge-change-report must install on ${platform}`);
+    assert.equal(skill?.kind, 'skill', `forge-change-report must render as a skill on ${platform}`);
+    assert.match(skill?.content ?? '', /forge-report-core:start/, `${platform} change-report skill must carry the core block`);
+  }
+
+  // Claude is the only platform that can structurally mark the skill non-user-invocable; the
+  // Grok/OpenCode skill adapters must not carry a Claude-only attribute.
+  assert.match(find('claude', 'forge-change-report'), /user-invocable: false/);
+  assert.doesNotMatch(find('grok', 'forge-change-report'), /user-invocable/);
+  assert.doesNotMatch(find('opencode', 'forge-change-report'), /user-invocable/);
+});
+
+// Conformance for the diagramming skill: installs as a background-only skill on every platform,
+// stays self-contained (no external URL), and its static SVG skeleton carries no executable or
+// foreign content. The prose legitimately names `<script>`/`<foreignObject>` as prohibitions, so
+// the inertness check is scoped to the extracted snippet fence, not the whole artifact.
+test('conformance: the diagramming skill installs as a skill and its SVG skeleton stays inert', async () => {
+  const root = process.cwd();
+  const plan = await buildWritePlan({ source: root, platform: 'all', scope: 'project', cwd: root });
+  const find = (platform: string, name: string) => plan.files.find((f) => f.platform === platform && f.name === name)?.content ?? '';
+
+  for (const platform of ['claude', 'opencode', 'codex', 'grok'] as const) {
+    const skill = plan.files.find((f) => f.platform === platform && f.name === 'forge-diagramming');
+    assert.ok(skill, `forge-diagramming must install on ${platform}`);
+    assert.equal(skill?.kind, 'skill', `forge-diagramming must render as a skill on ${platform}`);
+    assert.doesNotMatch(skill?.content ?? '', /https?:\/\//, `${platform} diagramming skill must not reference an external URL`);
+  }
+
+  // Claude is the only platform that can structurally mark the skill non-user-invocable; the
+  // Grok/OpenCode/Codex skill adapters must not carry a Claude-only attribute.
+  assert.match(find('claude', 'forge-diagramming'), /user-invocable: false/);
+  assert.doesNotMatch(find('grok', 'forge-diagramming'), /user-invocable/);
+  assert.doesNotMatch(find('opencode', 'forge-diagramming'), /user-invocable/);
+  assert.doesNotMatch(find('codex', 'forge-diagramming'), /user-invocable/);
+
+  const snippet = find('claude', 'forge-diagramming').match(/```svg\n([\s\S]*?)```/)?.[1] ?? '';
+  assert.ok(snippet.length > 0, 'forge-diagramming must carry an SVG skeleton snippet');
+  assert.doesNotMatch(snippet, /<script/i);
+  assert.doesNotMatch(snippet, /<foreignObject/i);
 });
 
 const GOLDEN_RENDERERS: Record<string, Record<string, (artifact: CanonicalArtifact) => { content: string }>> = {
@@ -1469,7 +1529,7 @@ test('bundled forge artifact installs as a Grok skill, with worker and adversary
   const root = process.cwd();
   const output = await captureConsole(() => main(['install', '--source', root, '--platform', 'grok', '--scope', 'project', '--dry-run'], { isInteractive: false, env: {} as NodeJS.ProcessEnv }));
   assert.equal(output.code, 0);
-  assert.match(output.stdout, /install: 8 source\(s\), 8 output\(s\)/);
+  assert.match(output.stdout, /install: 10 source\(s\), 10 output\(s\)/);
   assert.match(output.stdout, /grok skill forge -> .*\.grok\/skills\/forge\/SKILL\.md/);
   assert.doesNotMatch(output.stdout, /\.grok\/agents\/forge\.md/);
   assert.match(output.stdout, /grok agent forge-worker -> .*\.grok\/agents\/forge-worker\.md/);

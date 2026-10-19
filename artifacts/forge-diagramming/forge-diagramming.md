@@ -1,0 +1,150 @@
+---
+name: forge-diagramming
+description: Distill the diagram-SVG and dataviz non-negotiables an agent needs before hand-authoring an architecture or flow diagram or a chart inside a Forge report, verification, or artifact — form, inline SVG, palette gates, marks, labels, and interaction — so the visual carries one claim and stays readable on every host.
+kind: skill
+claude:
+  when_to_use: Loaded when a forge worker or the orchestrator is about to hand-author an architecture/flow diagram or a chart/dataviz inside a report, verification, or artifact; not for the forge-change-report graph (its embedded template owns it), and not for generic page design.
+  user-invocable: false
+---
+
+# Forge Diagramming Skill
+
+## 1. Role
+
+A diagram or chart earns its place when it lets a cold reader see a mechanism prose cannot assemble. If a sentence says it faster, write the sentence.
+
+Prefer a visual only when it reduces the reader's work. A diagram that repeats the prose, or a chart whose values already fit a three-row table, costs attention without returning insight.
+
+## 2. Scope and triggers
+
+Load this before hand-authoring a visual inside a report, verification, or artifact: an architecture or flow diagram, an inline SVG, or a data chart.
+
+- **Diagrams:** structure the reader cannot hold in prose — request paths, state transitions, ownership, option deltas.
+- **Charts:** a quantity the reader must compare or trend, where a table alone would hide the shape.
+- Load once, before the first visual; the same rules cover every diagram and chart in that response.
+- A visual embedded in prose still counts: the rules apply inside a report, a verification entry, and a standalone artifact alike.
+
+Not this:
+
+- `forge-change-report` embeds its own graph template. Never re-draw, re-style, or hand-write that graph; the template owns it.
+- Generic visual design (layout, typography, page composition) belongs to page-design guidance, not here.
+- Decorative graphics, logos, and illustrative art are out of scope.
+- Never pull in a charting library, a diagram runtime, a build step, or an external image. Everything here is portable prose you can execute by hand.
+
+## 3. Diagrams: decide what to draw
+
+- Depict the mechanism, not its name. A box labeled "Auth" with arrows called "calls" teaches nothing; draw what crosses the boundary and what it carries.
+- Comparing options means drawing the difference — typically the one edge each option adds or removes. Do not draw the same diagram twice with new labels.
+- Let complexity match the stakes: wireframes stay coarse; a migration plan shows ordering, rollback, and ownership. Omit everything the claim does not need.
+- Name the claim in the caption before drawing; if the caption needs two sentences, split the diagram.
+- Failure and retry paths belong in the frame only when the claim is about them.
+- Label every arrow with its payload or action — "writes", "invalidates", "polls every 30s" is information; an unlabeled arrow means "related somehow".
+- A legend appears only when an encoding repeats. If you use one shape twice, name it in place instead.
+
+## 4. Diagrams: inline SVG mechanics
+
+- Hand-author primitives only: `rect`, `circle`, `line`, `polyline`, `path`, and `text`.
+- Size the `viewBox` to the content, then let CSS cap it: `max-width: 100%; height: auto`.
+- Wide flows read left-to-right; layered stacks read top-to-bottom. Keep one primary axis.
+- Put strokes, text, and arrowheads in `currentColor` so the diagram survives light and dark. Allow at most one literal hue, reserved for the element that carries meaning.
+- Arrowheads come from `defs` + `marker` or a drawn `polygon`; any `id` stays fragment-internal.
+- Text is 11-13px at the drawn scale. Keep labels short; put sentences in the caption.
+- Align to a grid: shared baselines, even gaps between siblings, consistent margins.
+- Source order should match visual order, so the DOM reads the same way the picture does.
+- Reuse a host-page token for the one literal hue instead of inventing a color.
+- Wrap the drawing in `figure` + `figcaption`; the caption states the one claim. Add `role="img"` and an `aria-label` carrying the same claim.
+- Keep it self-contained: no `<script>`, no embedded `<style>`, no `<foreignObject>` inside the SVG. Gradients, patterns, and `use` may reference only fragment-internal ids.
+
+```svg
+<figure>
+  <svg viewBox="0 0 320 96" role="img" aria-label="Client writes to the API; the API invalidates the cache." style="max-width:100%;height:auto">
+    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="currentColor"/></marker></defs>
+    <rect x="8" y="32" width="88" height="32" rx="6" fill="none" stroke="currentColor"/>
+    <text x="52" y="52" text-anchor="middle" font-size="12" fill="currentColor">Client</text>
+    <line x1="100" y1="48" x2="150" y2="48" stroke="currentColor" marker-end="url(#arrow)"/>
+    <text x="125" y="40" text-anchor="middle" font-size="11" fill="currentColor">writes</text>
+    <rect x="154" y="32" width="88" height="32" rx="6" fill="none" stroke="currentColor"/>
+    <text x="198" y="52" text-anchor="middle" font-size="12" fill="currentColor">API</text>
+    <line x1="242" y1="48" x2="300" y2="48" stroke="currentColor" marker-end="url(#arrow)"/>
+    <text x="271" y="28" text-anchor="middle" font-size="11" fill="currentColor">invalidates</text>
+  </svg>
+  <figcaption>One write invalidates the cache.</figcaption>
+</figure>
+```
+
+## 5. Charts: form first, color last
+
+Work in this order:
+
+1. State the one claim the chart exists to support.
+2. Choose the form by the data's job:
+   - magnitude → bar, or heatmap with a sequential ramp;
+   - trend over time → line;
+   - distinct series → categorical color;
+   - one series is the point → emphasis, with the rest gray;
+   - above/below a baseline → diverging;
+   - part-to-whole → stacked bar;
+   - a single headline number → stat tile or hero number, not a chart;
+   - more than seven meaningful classes → table.
+3. Order nominal categories by value unless the data has a natural order.
+4. Label directly where the marks allow it.
+5. Add color last, and only where it carries meaning.
+
+Nominal bars take one hue — never color-by-value. Keep bar axes zero-based; a cropped line is allowed only when the change is the point, and the caption says so.
+
+## 6. Color by job, with computable gates
+
+- Categorical: a fixed order, never cycled. A ninth series folds into Other or facets.
+- Sequential: one hue, light to dark.
+- Diverging: two hues with a neutral gray midpoint.
+- Status colors are reserved — good, warning, serious, critical — always icon plus label, never series four.
+- Series hues come from the host page's own tokens where they exist.
+- One channel, one job: never spend hue on a value that position already encodes.
+- If two colors are indistinguishable in grayscale, they need a second encoding or they are one series.
+
+Compute, do not eyeball. Write a throwaway script and check:
+
+- adjacent CVD ΔE >= 8 in OKLab ×100; 6-8 only with a secondary encoding (shape, dash, or direct label);
+- the normal-vision worst pair ΔE >= 15 — a hard floor;
+- OKLCH lightness ~0.43-0.77 on light surfaces, ~0.48-0.67 on dark;
+- chroma >= 0.10;
+- marks >= 3:1 contrast against their surface — below that obligates visible labels or a table view;
+- ordinal ramps stay one hue, monotone in lightness, step ΔL >= 0.06.
+
+Never ship an eyeballed palette.
+
+## 7. Marks, labels, interaction
+
+- Bars: <= 24px thick, 4px rounded data-end, square at the baseline.
+- Lines: 2px with round cap and join. Markers: >= 8px.
+- Area fill: a ~10% opacity wash, never a solid block over the grid.
+- Grid and axes: 1px solid hairlines, one step off the surface. Never dashed.
+- Separate touching fills with a 2px surface gap; ring overlapping markers with 2px of surface. Never a border.
+- Label selectively: the endpoint, the extreme, the series the story is about. Measure the text before placing it inside a mark; a clipped label is a bug.
+- Legend for two or more series; none for one — the title or caption can name it.
+- Text wears text tokens, never series color. Exception: a label inside a fill picks white or ink by luminance.
+- Hover layer by default: crosshair + tooltip on lines, per-mark tooltip on bars and dots. Hit target at least 24px beyond the mark.
+- The same content must appear on keyboard focus, and values must be reachable without hover — direct labels or a table-view twin.
+- Insert all names via `textContent`, never `innerHTML`.
+- Filters, if any, sit in one row above what they scope.
+- Reserve the strongest contrast for the mark the claim is about.
+- No drop shadows, glows, or 3D: decoration is not encoding.
+
+## 8. Before you call it done
+
+Any one of these is a bug:
+
+- dual axes;
+- recolor-on-filter — a series changes color when the data is filtered;
+- a one-bar bar chart or a two-slice pie;
+- a donut comparing close values;
+- a rainbow sequential ramp;
+- a hue at the diverging midpoint;
+- a value ramp on nominal categories;
+- a number on every point;
+- a border instead of a gap;
+- clipped labels;
+- a tooltip as the only way to read a value;
+- pinpoint hover targets.
+
+Then render and look: the color gates check color, not layout. Open or screenshot the output and eyeball label collisions, overflow, and geometry.

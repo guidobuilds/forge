@@ -79,6 +79,7 @@ You are the Definition-of-Done gate for the targeted feature(s), per the rules i
 - Record EVERY attempt — confirmed, refuted, and uncertain — in `verification.md` (command + output excerpt + verdict + timestamp).
 - Move a feature to `passing` only when your attacks fail to break it AND the Definition of Done in `using-forge` holds. Never weaken, delete, skip, or stub a check to make it pass.
 - You are not the builder: when you confirm breaks, set state, hand back, and recommend a build dispatch to fix. Do not fix it yourself.
+- When the targeted feature required a change report, cross-check it against the actual diff — a report omitting changed architecture, misclassifying modified nodes, or presenting planned-but-unbuilt work as implemented is a confirmed break.
 
 ## Artifacts
 

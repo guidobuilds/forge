@@ -9,6 +9,29 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-18
+
+### Added
+
+- **`forge-change-report`** — an on-demand skill that writes `.forge/<feature-slug>/change-report.html`:
+  a single self-contained interactive HTML report of what changed architecturally (added / modified /
+  removed entities and integrations, first-level connections, impacted functionalities), so an agent's
+  edits stop erasing developer architectural knowledge. `forge-worker` loads it at the closure of any
+  non-trivial build that modified project source files (required even on `partial`/`blocked`, reflecting
+  the actual working tree) and hands the user the local path; it is distinct from `session-handoff.md`,
+  which is operational continuation state. Conformance tests lock the trigger in rendered
+  `forge-worker`/`using-forge` prose and the skill's install shape on all four platforms, alongside
+  mechanical and behavioral tests of the template's escaping, filtering, and graph rendering.
+- **`forge-diagramming`** — an on-demand skill loaded when forge is about to hand-author a diagram
+  or chart inside a report, verification, or artifact. It distills the non-negotiables that keep a
+  hand-drawn visual portable and readable: diagram judgment (depict the mechanism, draw the option
+  delta, label every arrow), inline-SVG mechanics (primitives only, `currentColor`, one inert static
+  skeleton), a form-first chart procedure, computable palette gates (adjacent CVD ΔE, OKLCH
+  lightness/chroma, mark contrast, ordinal ΔL), and mark/label/interaction specs. It deliberately
+  excludes the `forge-change-report` graph (its embedded template owns it) and generic page design.
+  The bundled roster is now ten artifacts; conformance tests lock the skill's install shape and the
+  inert SVG snippet on all four platforms.
+
 ## [0.10.0] - 2026-09-09
 
 ### Added

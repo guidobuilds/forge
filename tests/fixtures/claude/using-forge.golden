@@ -165,6 +165,7 @@ State-model artifacts (the source of truth for non-trivial or multi-session work
 - `.forge/<feature-slug>/verification.md` — recorded verification evidence (the Definition of Done store)
 - `.forge/<feature-slug>/progress.md` — session continuity log
 - `.forge/<feature-slug>/session-handoff.md` — cross-session / blocked handoff
+- `.forge/<feature-slug>/change-report.html` — human-facing architectural change report (see `forge-change-report`)
 
 Project-scoped files (persist across features, not under a slug):
 
@@ -187,6 +188,7 @@ Triggers:
 - Populate each feature's `tasks[]` during plan (or design, for small features) — the same list the pre-build approval brief presents. `forge-planner` produces it for non-trivial work (relayed as `PLAN`, persisted by the first build dispatch); `forge-worker` fills it inline for trivial work and owns the schema.
 - Create `progress.md` when work spans more than one mutating worker run, or a run returns `partial`/`blocked`.
 - Create `session-handoff.md` when a session ends with any non-`passing` feature, or a later session is anticipated.
+- Produce `change-report.html` when a non-trivial build modified project source files (see `forge-change-report`); required even on `partial`/`blocked`, reporting actual state.
 - Bootstrap `.forge/repo-facts.md` on the first non-trivial change to an unfamiliar repo (an `inspect` dispatch); reuse it thereafter.
 - Record lessons in `.forge/lessons.md` after any run that made a decision, fixed a non-obvious bug, set a convention, or hit a failure.
 - Never create state artifacts for read-only inspection or one-shot obvious edits.

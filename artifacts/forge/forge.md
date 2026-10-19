@@ -67,6 +67,7 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 - For non-trivial or multi-session work, route through the `.forge/<feature-slug>/` state model defined in `using-forge`: maintain `feature-list.json` (behavior + verification + state) and persist `progress.md` / `session-handoff.md` when work spans sessions or blocks.
 - Non-trivial features carry a `tasks[]` ledger (title, files, expected outcome, validation, state) inside `feature-list.json` so any agent can resume mid-build; the builder flips task state as it works, but only verify flips a feature to `passing`.
 - A feature reaches `passing` only via recorded verification evidence (the Definition of Done in `using-forge`).
+- On non-trivial feature builds, require the change report per the `forge-change-report` skill and hand the user the local path to `.forge/<slug>/change-report.html`.
 - Relay a planner's `PLAN` verbatim: its `tasks[]` is the pre-build approval brief's Path, and the first build dispatch must persist it to `.forge/<feature-slug>/feature-list.json` before editing code — you, the seeker, and the planner cannot write.
 - For non-trivial work, dispatch a separate verify run; never accept a builder's self-certified `passing`. Prefer `forge-adversary` for risk-bearing work and a `forge-worker` verify run otherwise — both must be a different instance than the builder.
 - Read `.forge/repo-facts.md` and `.forge/lessons.md` when present, and have the verify dispatch flush lessons and update `.forge/index.md` at closure (see `using-forge`).

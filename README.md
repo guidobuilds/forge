@@ -141,7 +141,7 @@ Forge installs the **same operating model** on every agent, but **how you invoke
 
 ### The pieces
 
-Forge is one orchestrator, a read-only seeker, a think-only planner, a two-tier worker model, and a dedicated adversary, with two supporting skills:
+Forge is one orchestrator, a read-only seeker, a think-only planner, a two-tier worker model, and a dedicated adversary, with four supporting skills:
 
 - **`forge`** — the orchestrator. It talks to you, decides how much process a task needs, and delegates the real work. It does not edit code itself.
 - **`forge-seeker`** — the collector. A cheap, fast, read-only agent (`haiku` on Claude Code) that maps the repo, searches, fetches docs, and returns typed evidence (`map:` / `evidence:` / `unknown:`) — facts, not conclusions. `forge` dispatches it for wide inspection and `forge-worker` for read-only shards; it cannot write, execute, or spawn.
@@ -151,6 +151,8 @@ Forge is one orchestrator, a read-only seeker, a think-only planner, a two-tier 
 - **`forge-adversary`** — the breaker. After a build, the orchestrator dispatches it to *try to break* the work — logically and technically (logic/requirements, runtime, security, performance). It gates the Definition of Done: a confirmed, reproducible break keeps the feature out of `passing`. It complements `forge-grill`, which grills plans *before* building.
 - **`using-forge`** — the shared operating-model skill the orchestrator follows.
 - **`forge-grill`** — an orchestrator mode for stress-testing a plan or design before building. The orchestrator invokes it proactively before non-trivial or risk-bearing builds; also available as `/forge-grill` for manual use.
+- **`forge-change-report`** — an on-demand skill `forge-worker` loads at the closure of a non-trivial feature build. It writes `.forge/<feature-slug>/change-report.html`: a self-contained interactive HTML report of what changed architecturally (added/modified/removed entities and integrations, first-level connections, impacted functionalities), so a diff stops erasing architectural knowledge.
+- **`forge-diagramming`** — an on-demand skill loaded when forge is about to hand-author a diagram or chart. It distills diagram SVG mechanics and the dataviz non-negotiables (form, palette gates, marks, labels, interaction) so reports and artifacts carry deliberate, readable visuals. It is not for the `forge-change-report` graph, which its own template owns, and not for generic page design.
 
 What changes per platform is the **kind** each piece is installed as, and therefore how you trigger it.
 
@@ -160,6 +162,8 @@ What changes per platform is the **kind** each piece is installed as, and theref
 |---|---|---|
 | `forge` | subagent (`model: opus`, structural `tools` allowlist) | mention it by name, `@forge`, or `claude --agent forge` |
 | `forge-grill` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before non-trivial or risk-bearing builds |
+| `forge-change-report` | skill (not user-invocable) | loaded by `forge-worker` at build closure to write `.forge/<slug>/change-report.html` |
+| `forge-diagramming` | skill (not user-invocable) | loaded by forge workers before hand-drawing diagrams/charts |
 | `using-forge` | skill (`model: sonnet`, not user-invocable) | loaded automatically by `forge` before routing work |
 | `forge-seeker` | subagent (`model: haiku`, read-only tools + `WebFetch`) | `forge` dispatches it for wide inspection and grill fact-finding; `forge-worker` for read-only shards |
 | `forge-planner` | subagent (`model: opus`, read-only tools) | `forge` dispatches it for non-trivial design/plan; it returns a `PLAN` the first build persists |
@@ -187,7 +191,7 @@ Without that, invoke it explicitly per session (mention it by name, `@forge`, or
 | `forge-worker` | subagent | coordinator; `forge` delegates with `task: allow` |
 | `forge-worker-leaf` | subagent | terminal shard; spawned by coordinator (`task: deny`) |
 | `forge-adversary` | subagent | the `forge` agent delegates to it to gate risk-bearing work after build |
-| `using-forge`, `forge-grill` | skills | loaded by the agent as needed |
+| `using-forge`, `forge-grill`, `forge-change-report`, `forge-diagramming` | skills | loaded by the agent as needed |
 
 Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator here is a real agent with file and shell tools **denied**, so it is *structurally* forced to delegate to the `forge-worker` subagent instead of doing the work itself.
 
@@ -196,7 +200,7 @@ Switch your primary agent to **`forge`**. Unlike Claude Code, the orchestrator h
 | Piece | Installed as | Location |
 |---|---|---|
 | `forge`, `forge-worker`, `forge-worker-leaf`, `forge-adversary`, `forge-seeker`, `forge-planner` | agents (`.toml`) | `~/.codex/agents/` (or `.codex/agents/` per project) |
-| `using-forge`, `forge-grill` | skills | `~/.agents/skills/` (or `.agents/skills/` per project) |
+| `using-forge`, `forge-grill`, `forge-change-report`, `forge-diagramming` | skills | `~/.agents/skills/` (or `.agents/skills/` per project) |
 
 The CLI writes agent `.toml` files but does not generate `AGENTS.md` or profiles. `forge-seeker` and `forge-planner` run with `sandbox_mode = "read-only"`; a read-only Codex sandbox still executes commands, so their no-execution rule is stated in their own installed prose rather than enforced by the harness.
 
@@ -209,6 +213,8 @@ The CLI writes agent `.toml` files but does not generate `AGENTS.md` or profiles
 | `forge` | skill | type `/forge` in the prompt |
 | `forge-grill` | skill | type `/forge-grill` |
 | `using-forge` | skill | `/using-forge` (usually pulled in by `/forge`) |
+| `forge-change-report` | skill | loaded by `forge-worker` at build closure |
+| `forge-diagramming` | skill | loaded by forge workers before hand-drawing diagrams/charts |
 | `forge-seeker` | subagent (`model: grok-composer-2.5-fast`, read-only tools) | main thread or `forge-worker` delegates via `task` for read-only fact-finding |
 | `forge-planner` | subagent (`model: grok-build-plan`, read-only tools) | main thread delegates via `task` for non-trivial design/plan |
 | `forge-worker` | subagent | coordinator; main thread delegates via `task` |

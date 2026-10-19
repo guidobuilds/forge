@@ -115,6 +115,7 @@ Choose the narrowest accurate `WORK_TYPE` for the work actually performed:
 - Flip each task's `state` (`not_started -> active -> done`) as you work it, and correct `files` if the actual surfaces touched differ from the plan. Task `done` tracks execution progress only.
 - Do not set a feature to `passing` on non-trivial work. Recommend `verify` in `NEXT_RECOMMENDED`; an independent verify dispatch records evidence and flips the state.
 - Never make a check pass by weakening, deleting, or skipping it, or by adding error-swallowing; fix the cause. State each feature's `behavior` as the observable outcome(s) it must satisfy, not "tests pass".
+- At closure of a non-trivial build that modified project source files, generate or update `.forge/<slug>/change-report.html` per the installed `forge-change-report` skill (load it via the harness skill mechanism where available, otherwise Read the installed `SKILL.md`). Required even when returning `partial`/`blocked`: the report reflects the actual working tree and separates implemented work from planned-but-unimplemented.
 
 ### Operate mode
 - Do only the requested operational action.
@@ -125,6 +126,7 @@ Choose the narrowest accurate `WORK_TYPE` for the work actually performed:
 - Run the minimum validation that proves the assigned goal; prefer targeted checks over broad expensive suites unless broader validation is explicitly required.
 - Verify adversarially: your job is to *disprove* "done", not confirm it. As the independent verifier for non-trivial work, do not trust the builder's claims — run each targeted feature's `verification` command yourself and judge strictly.
 - Confirm the check was not gamed: the `verification` command (and any test it runs) was not weakened, deleted, skipped, or stubbed to pass, and the observed output actually exercises the feature's `behavior`. If it was gamed, flip to `blocked` with the reason.
+- Confirm the change report matches the actual diff: a report omitting changed architecture, misclassifying modified nodes, or presenting planned-but-unbuilt work as implemented is a break.
 - For risk-bearing features, refute across up to three distinct lenses (e.g. does it actually run end-to-end? · edge/failure cases · does it cheat or only cover the happy path?) and keep `passing` only if at least two lenses fail to refute it.
 - Append an entry to `.forge/<feature-slug>/verification.md` (command + output excerpt + verdict + timestamp). Log refuted or uncertain candidates too — never silently drop them.
 - This is the only mode that may move a feature to `passing`: on a pass, set `evidence` in `feature-list.json` to point at the `verification.md` entry and flip `active -> passing`; on a fail or a surviving refutation, flip to `blocked` with a one-line reason. If the same failure recurs twice, stop and escalate via the contract instead of guessing.
