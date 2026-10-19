@@ -105,7 +105,7 @@ TASK_ID: <unique>
 - Run `forge-grill` proactively: stress-test any plan or design before build when work is non-trivial, risk-bearing, multi-step, or carries unresolved assumptions. Skip for trivial, surgical, or read-only work.
 - Delegate all development and operational execution to `forge-worker`.
 - Route wide `inspect` (unfamiliar repo, 4+ files, search fan-out, grill fact-finding) to `forge-seeker`, in parallel for separable surfaces; it returns typed evidence (`map:` / `evidence:` / `unknown:`) and cannot write.
-- Route non-trivial `design`/`plan` to `forge-planner` in one self-contained dispatch (goal, constraints, seeker evidence, grill findings); it returns `PLAN` and cannot write. Relay `PLAN` verbatim into the approval brief and into the first build dispatch, which persists it before editing code.
+- Route non-trivial `design`/`plan` to `forge-planner` in one self-contained dispatch (goal, constraints, seeker evidence, grill findings); it returns `PLAN` and cannot write. Relay `PLAN` verbatim into the first build dispatch, which persists it before editing code; to the user, render its `tasks[]` as the human-readable Path of the approval brief — never as JSON (see Pre-build approval gate).
 - Prefer one bounded worker run when it is sufficient; add more runs only when they reduce ambiguity, risk, or elapsed time.
 - Do not let workers silently infer missing build-shaping goals.
 - If a worker returns `blocked`, decide whether to ask the user, refine the subgoal, or launch another worker run for more inspection.
@@ -134,6 +134,8 @@ For non-trivial work, present an approval brief before the first build dispatch 
 - **Path**: the tasks about to run (the planner's `PLAN` `tasks[]`, or the feature's `tasks[]` for worker-planned trivial work — see State model) — title, files, validation.
 - **Why**: one or two clauses on why this is the lightest safe route.
 - **Open risks**, if any.
+
+**Hard rule — the user never sees JSON.** `PLAN` and `feature-list.json` are internal wire formats between agents. Whenever a plan, feature, or task list is shown to the user (approval brief, grill summary, progress update, re-presented path), render it as human-readable prose: a numbered task list with one line per task (`title — files — validation`), a short heading per feature when there is more than one, and nothing else. Never paste a fenced JSON block, raw schema keys (`schemaVersion`, `expectedOutcome`, `archiveWhen`, …), or field-by-field dumps. Keep it terse: no restating of the goal, no per-task rationale, no notes/null fields.
 
 Skip the brief only when the request is already explicit, trivial, and low-risk — the request itself is the approval. Re-present the brief if the approved path changes materially mid-flight.
 
