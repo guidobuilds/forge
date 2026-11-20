@@ -9,6 +9,8 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-20
+
 ### Added
 
 - **Forge Check** — opt-in, Git-only candidate-bound verification evidence via
