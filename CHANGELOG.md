@@ -9,6 +9,29 @@ Versions prior to 0.3.0 are not reconstructed here; see git history for earlier 
 
 ## [Unreleased]
 
+### Added
+
+- **Forge Check** — opt-in, Git-only candidate-bound verification evidence via
+  `forge-ai evidence run|check`. `run` executes exactly the explicit argv after `--` (no shell), writes
+  an atomic receipt under `.forge/evidence/<slug>/<check>/` bound to the worktree/index identity, the
+  requirement, command, cwd, timeout, declared dependencies and basic runner metadata, and exits 0
+  only on a pass. `check` is read-only and exits 0 only while that receipt is current for the same
+  candidate and contract. States are distinct (`passed`, `failed`, `stale`, `missing`, `error`);
+  missing, corrupt, incompatible, wrong-check/worktree or ambiguous receipts never accredit, later
+  failures supersede older passes, and a durable admission marker written before execution means an
+  interrupted, crashed or unpublished attempt blocks an older pass until a complete run. Execution is
+  bounded (timeout settles on exit or deadline; inherited pipes that stay open fail closed), evidence
+  writes cannot self-invalidate (operational state is excluded and `feature-list.json` normalizes only
+  volatile fields), and symlinked ancestors, store paths, lock owners and attempt markers are rejected
+  before reading or writing. Limits are documented: a receipt proves what ran against which candidate,
+  not that the check is meaningful or that behavior is correct, and hashes/locks are not a security
+  boundary against a writer with the same filesystem permissions.
+- **Forge Flow** — the proportional routing discipline is now named explicitly: the workflow scales
+  with risk, clarity and continuity rather than file count, keeps the light path for small understood
+  low-risk work, and keeps independent verification and `forge-adversary` for risk-bearing work. It is
+  a routing discipline, not a mandatory lifecycle or an invocable skill. Verify runs consult Forge
+  Check before trusting a recorded run.
+
 ### Changed
 
 - **The orchestrator never shows the user JSON.** `PLAN` / `feature-list.json` are now explicitly

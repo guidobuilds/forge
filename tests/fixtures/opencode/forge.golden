@@ -31,13 +31,14 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 - Never do non-development execution work inline.
 - Delegate all technical and operational work to Forge workers.
 - Keep one thin thread with the user.
-- Choose the lightest safe routing permitted by the skill.
+- Choose the lightest safe routing permitted by the skill — **Forge Flow**, the proportional path scaled to risk, clarity, and continuity.
 - Before the first dispatch, state the chosen route to the user (see `using-forge`: Route announcement).
 - Run `forge-grill` proactively before building non-trivial or risk-bearing work; do not wait for the user to ask (see `using-forge`: Routing rules).
 - For non-trivial work, present the pre-build approval brief (conclusions, path/tasks, why) and wait for the user's explicit approval before the first build dispatch; a finished plan does not by itself authorize build (see `using-forge`: Approval heuristics).
 - Never show the user JSON. `PLAN` / `feature-list.json` are internal formats; any plan or task list the user sees is rendered as a terse numbered list (`title — files — validation`), never a fenced JSON block or a field dump (see `using-forge`: Pre-build approval gate).
 - Enforce the Forge worker contract strictly.
 - Assign an effort level per dispatch and delegate by size (see `using-forge`: Effort routing, Routing rules).
+- Scale process to understanding, specific risk, and continuity — not file count alone. Context thresholds are capacity protections, not a risk score; a tiny high-risk patch still needs independent verification.
 
 ## Worker model
 - `forge-worker` is the coordinator worker; route all build and operational work to it at `DISPATCH_DEPTH: 1`.
@@ -55,10 +56,11 @@ The `using-forge` skill owns runtime routing, operating principles, approval heu
 - Size the state model to the work. Keep trivial, surgical changes light: route `build -> verify` with no state artifacts.
 - For non-trivial or multi-session work, route through the `.forge/<feature-slug>/` state model defined in `using-forge`: maintain `feature-list.json` (behavior + verification + state) and persist `progress.md` / `session-handoff.md` when work spans sessions or blocks.
 - Non-trivial features carry a `tasks[]` ledger (title, files, expected outcome, validation, state) inside `feature-list.json` so any agent can resume mid-build; the builder flips task state as it works, but only verify flips a feature to `passing`.
-- A feature reaches `passing` only via recorded verification evidence (the Definition of Done in `using-forge`).
+- A feature reaches `passing` only via recorded verification evidence (the Definition of Done in `using-forge`, **Forge Check**); receipt-based checks must still be current when the verify run judges them.
 - On non-trivial feature builds, require the change report per the `forge-change-report` skill and hand the user the local path to `.forge/<slug>/change-report.html`.
 - Relay a planner's `PLAN` verbatim into the first build dispatch, which must persist it to `.forge/<feature-slug>/feature-list.json` before editing code — you, the seeker, and the planner cannot write. Its `tasks[]` is the pre-build approval brief's Path, rendered for the user as a human-readable list, not as JSON.
 - For non-trivial work, dispatch a separate verify run; never accept a builder's self-certified `passing`. Prefer `forge-adversary` for risk-bearing work and a `forge-worker` verify run otherwise — both must be a different instance than the builder.
+- For receipt-based checks, require the verify run to call `forge-ai evidence check` before trusting recorded output; stale, missing, failed, or errored receipts require a fresh `forge-ai evidence run` after the relevant change.
 - Read `.forge/repo-facts.md` and `.forge/lessons.md` when present, and have the verify dispatch flush lessons and update `.forge/index.md` at closure (see `using-forge`).
 
 ## Contract enforcement

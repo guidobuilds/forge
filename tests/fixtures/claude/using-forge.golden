@@ -35,7 +35,7 @@ Apply these rules before choosing or invoking any worker run:
 
 ## Dynamic routing model
 
-There is no mandatory lifecycle such as `explore -> design -> plan -> build -> done`.
+There is no mandatory lifecycle such as `explore -> design -> plan -> build -> done`. This proportional routing is **Forge Flow**: the request takes the lightest safe path, scaled to risk, clarity, and continuity rather than file count; it is a routing discipline, not a mandatory lifecycle or a separate invocable skill.
 
 Use the lightest safe routing for the current request. Common worker work types are:
 - `inspect`: understand the repo, artifacts, integrations, or current behavior
@@ -114,6 +114,7 @@ TASK_ID: <unique>
 - If a worker returns `blocked`, decide whether to ask the user, refine the subgoal, or launch another worker run for more inspection.
 - Size the state model to the work (see State model): skip it for trivial changes; add it for non-trivial or multi-session work.
 - For non-trivial work, do not accept a builder's self-certified `passing`; dispatch a separate verify run to confirm it (`forge-adversary` for risk-bearing work, else a `forge-worker` verify run).
+- Route by understanding, specific risk, and continuity/resumability — not file count alone. Context thresholds (reads/searches/edits) are capacity protections, not a risk score; a tiny high-risk patch is never exempt from independent verification.
 - Delegate by size: handle inline only a 1-3 file read, a mechanical known write, or a git status check; delegate 4+ file reads to `forge-seeker`, and multi-file analysis or writes or running tests/builds/installs to `forge-worker`. Inside a coordinator run, ≥ 8 reads or the sub-delegation triggers above → `forge-seeker` for read-only shards, `forge-worker-leaf` for write shards. The orchestrator thread stays thin because it accumulates summaries, not implementations.
 - Assign an effort level per dispatch (see Effort routing).
 - When `.forge/repo-facts.md` or `.forge/lessons.md` exist, have the worker read them so it reuses known facts and avoids repeating past mistakes.
@@ -181,19 +182,23 @@ Skip any artifact when it would add ceremony without reducing risk. `forge-worke
 
 Size the state model to the work so the lightest safe workflow stays the default.
 
-- **Trivial / surgical** (single-file, low-risk, obvious, no cross-session memory): no state artifacts. Route `build -> verify` (or `inspect -> build -> verify`). The builder may self-verify.
+- **Trivial / surgical** (single-file, low-risk, obvious, no cross-session memory): no state artifacts. Route `build -> verify` (or `inspect -> build -> verify`). The builder may self-verify only when the change is genuinely low-risk.
 - **Single non-trivial feature**: create `feature-list.json` and `verification.md`. A separate verify dispatch must record evidence before any feature reaches `passing`.
 - **Multi-feature / multi-session / blocked / handoff-likely**: also create `progress.md` and `session-handoff.md`; carry multiple `feature-list.json` entries with `dependencies`.
 
 Triggers:
 - Create `feature-list.json` when the request decomposes into one or more verifiable behaviors and the work is state-changing, risky, or judged on "is it done?".
 - Populate each feature's `tasks[]` during plan (or design, for small features) — the same list the pre-build approval brief presents. `forge-planner` produces it for non-trivial work (relayed as `PLAN`, persisted by the first build dispatch); `forge-worker` fills it inline for trivial work and owns the schema.
-- Create `progress.md` when work spans more than one mutating worker run, or a run returns `partial`/`blocked`.
-- Create `session-handoff.md` when a session ends with any non-`passing` feature, or a later session is anticipated.
+- Create `progress.md` when work spans more than one mutating worker run, or a run returns `partial`/`blocked`; create `session-handoff.md` when a session ends with any non-`passing` feature or a later session is anticipated.
 - Produce `change-report.html` when a non-trivial build modified project source files (see `forge-change-report`); required even on `partial`/`blocked`, reporting actual state.
 - Bootstrap `.forge/repo-facts.md` on the first non-trivial change to an unfamiliar repo (an `inspect` dispatch); reuse it thereafter.
 - Record lessons in `.forge/lessons.md` after any run that made a decision, fixed a non-obvious bug, set a convention, or hit a failure.
 - Never create state artifacts for read-only inspection or one-shot obvious edits.
+
+### Evidence freshness
+- **Forge Check** — when receipt-based checks are used, record each `verification` with `forge-ai evidence run --slug <slug> --check <id> --requirement <text> -- <command>`; verify runs call `forge-ai evidence check` with the same contract before trusting a recorded run, and treat `failed`, `stale`, `missing`, or `error` as not evidenced. A check counts only while its receipt is current for the exact candidate and contract.
+- Changing the candidate, command, cwd, timeout, requirement, declared dependency receipt, or runner environment invalidates prior evidence; a later failed/error run supersedes an older pass, and a passing receipt is necessary evidence, not behavioral proof. Forge's own verification/progress/handoff/build-log/change-report and closure lessons/index outputs plus volatile feature-list progress/evidence fields are excluded; behavior, verification, dependencies, checks, repros, `repo-facts`, and `explore` remain covered. A newer admitted attempt without a complete receipt makes `check` fail closed until a later complete run.
+- Keep independent semantic judgment, note that this MVP requires Git, and never treat a passing receipt as merge authorization.
 
 Feature `state` is one of `not_started | active | blocked | passing`. The orchestrator owns transitions: a builder may move `not_started -> active`, but only a verify dispatch (`forge-adversary` or a `forge-worker` verify run) moves a feature to `passing` (or `-> blocked` on failure).
 
@@ -204,7 +209,7 @@ Closure: when a feature reaches `passing`, the verify dispatch flushes durable l
 A feature's `state` may become `passing` only when ALL hold:
 
 1. its `verification` command was actually run,
-2. the result is recorded in `.forge/<feature-slug>/verification.md` (command + output excerpt + pass verdict + timestamp),
+2. the result is recorded in `.forge/<feature-slug>/verification.md` (command + output excerpt + pass verdict + timestamp) and backed by a current `forge-ai evidence` receipt when receipt-based checks are used,
 3. `evidence` in `feature-list.json` points to that entry,
 4. every `id` in its `dependencies` is already `passing`.
 
@@ -212,7 +217,7 @@ A task's `state: done` records execution progress only and never substitutes for
 
 No feature moves to `passing` on assertion alone, and never by weakening, deleting, skipping, or stubbing the check; the recorded output must actually exercise the named `behavior`. A failed or unrun verification keeps it `active` or moves it to `blocked` with a one-line reason.
 
-Independent, adversarial verification: for non-trivial work the builder may NOT self-certify. Dispatch a SEPARATE verify run whose job is to try to *disprove* "done" — use `forge-adversary` for risk-bearing work (the dedicated breaker) and a `forge-worker` `WORK_TYPE: verify` run otherwise. It runs the verification commands, judges strictly, and for risk-bearing features refutes across up to three distinct lenses, keeping `passing` only if at least two fail to refute. It writes `verification.md` (logging refuted/uncertain candidates too) and flips states. Build and verify are different instances. Trivial-tier work is exempt.
+Independent, adversarial verification: for non-trivial work the builder may NOT self-certify. Dispatch a SEPARATE verify run whose job is to try to *disprove* "done" — use `forge-adversary` for risk-bearing work (the dedicated breaker) and a `forge-worker` `WORK_TYPE: verify` run otherwise. It checks receipt freshness before relying on any recorded run, runs the verification commands again after relevant changes, judges strictly, and for risk-bearing features refutes across up to three distinct lenses, keeping `passing` only if at least two fail to refute. It writes `verification.md` (logging refuted/uncertain candidates too) and flips states. Build and verify are different instances. Trivial, low-risk work is exempt; a tiny high-risk patch is not.
 
 ## Contract enforcement
 

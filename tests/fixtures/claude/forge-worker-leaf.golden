@@ -38,7 +38,7 @@ Same set as `forge-worker`: `inspect`, `design`, `plan`, `build`, `operate`, `ve
 
 ### Verify on leaf
 
-When dispatched as a leaf for `verify`, run the assigned checks in this single context. Do not sub-delegate. Adversarial verify for risk-bearing work remains `forge-adversary` at orchestrator depth.
+When dispatched as a leaf for `verify`, run the assigned checks in this single context. Do not sub-delegate. Under **Forge Check**, if a check uses `forge-ai evidence`, call `forge-ai evidence check` before relying on a recorded run; a stale, missing, failed, or errored receipt is not a pass, and a current receipt still needs your semantic judgment. Adversarial verify for risk-bearing work remains `forge-adversary` at orchestrator depth.
 
 ## Concurrency discipline
 
