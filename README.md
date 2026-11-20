@@ -47,7 +47,7 @@ inspect -> design -> plan -> build -> verify
 build -> verify
 ```
 
-There is no mandatory lifecycle. Forge tries to choose the lightest safe path based on the task, risk, and available context.
+There is no mandatory lifecycle. Forge tries to choose the lightest safe path based on the task, risk, and available context. Forge calls this proportional routing **Forge Flow**: the path scales with risk, clarity, and continuity rather than file count, and it is a routing discipline, not a mandatory lifecycle or a separate invocable skill.
 
 Before delegating, the orchestrator states the chosen route to the user — the work types it plans to run, whether `forge-grill` runs before build, and why it is the lightest safe path for that request. For non-trivial work, it then presents an approval brief — conclusions, planned tasks, why — and waits for an explicit go-ahead before the first build dispatch.
 
@@ -69,17 +69,37 @@ Small, obvious changes do not need ceremony. The goal is to use durable artifact
 For non-trivial or multi-session work, Forge keeps a small state model under `.forge/<feature-slug>/`, sized to the task:
 
 - `feature-list.json` — the unit-of-work ledger. Each feature carries the triple `behavior` + `verification` (a runnable command) + `state` (`not_started | active | blocked | passing`), plus a `tasks[]` execution ledger (title, files, expected outcome, validation, state) so any agent can resume mid-build.
-- `verification.md` — recorded verification evidence: the command, its output, and a pass/fail verdict.
+- `verification.md` — recorded verification evidence: the command, its output, a pass/fail verdict, and (when used) the receipt ID.
+- `.forge/evidence/` — machine receipts written by `forge-ai evidence run`; each receipt binds one check and requirement to the exact Git candidate, command, cwd, timeout, dependencies, and runner environment.
 - `progress.md` / `session-handoff.md` — session continuity and handoff, written when work spans sessions or blocks.
 
 Before build starts on non-trivial work, Forge presents an approval brief — conclusions, the planned tasks, and why — and waits for an explicit go-ahead; a finished plan does not authorize build by itself.
 
 Two rules make "done" mean done:
 
-- **Definition of Done.** A feature only reaches `passing` once its verification command was actually run and the evidence is recorded in `verification.md`. No feature is marked done on assertion alone.
-- **Independent verification.** For non-trivial work the builder does not certify its own work. The orchestrator dispatches a separate `forge-worker` verify run that re-runs the checks and flips the state.
+- **Definition of Done.** A feature only reaches `passing` once its verification command was actually run and the evidence is recorded in `verification.md`, backed by a current `forge-ai evidence` receipt when the project uses the CLI. No feature is marked done on assertion alone.
+- **Independent verification.** For non-trivial work the builder does not certify its own work. The orchestrator dispatches a separate `forge-worker` verify run that re-runs the checks and flips the state. It checks receipt freshness before trusting any recorded run.
 
-Trivial, surgical changes skip all of this and stay on the `build -> verify` path.
+Trivial, low-risk changes skip all of this and stay on the `build -> verify` path. Process still scales with risk, clarity, and continuity rather than file count: a small authorization or data-loss change can need more scrutiny than a large documentation edit, and a tiny high-risk patch is not exempt.
+
+### Forge Check: candidate-bound verification evidence
+
+**Forge Check** is Forge's name for verification evidence bound to the change: a recorded check counts only while its receipt is current for that exact candidate and contract. The CLI that produces it is opt-in and Git-only in this MVP. It never executes a command just because a Markdown or JSON file was read, and it never uses an implicit shell: the argv after `--` is passed exactly as given.
+
+```sh
+forge-ai evidence run   --slug my-feature --check unit --requirement "the unit suite passes" -- pnpm test
+forge-ai evidence check --slug my-feature --check unit --requirement "the unit suite passes" -- pnpm test
+```
+
+`run` writes an atomic receipt under `.forge/evidence/<slug>/<check>/` with the Git worktree/index identity, exact argv and cwd, timeout, requirement, declared dependency receipts, exit status, bounded output, and basic runner metadata. `check` is read-only and exits 0 only when that receipt is current for the same candidate and contract. States are distinct: `passed`, `failed`, `stale`, `missing`, and `error`; anything other than `passed` exits non-zero.
+
+A changed file (tracked or non-ignored untracked, including deletions, modes, and symlink targets), command, requirement, cwd, timeout, declared dependency receipt, or runner environment makes evidence stale. A later failed or errored run supersedes an older pass instead of leaving it current. Missing, corrupt, incompatible, or wrong-worktree receipts are rejected. `.forge/evidence/` is excluded from the candidate identity so writing receipts does not invalidate them. Historical receipts are preserved; old Markdown evidence is never auto-promoted to a current pass.
+
+Forge operational outputs under `.forge/<slug>/` — `verification.md`, `progress.md`, `session-handoff.md`, `build-log.md`, and `change-report.html` — plus the root closure logs `.forge/lessons.md` and `.forge/index.md` are excluded as state/evidence logs. `.forge/<slug>/feature-list.json` is normalized only for `updatedAt`, feature `state`/`evidence`, and task `state`/`notes`; `behavior`, `verification`, `dependencies`, `archiveWhen`, task `validation`, source, checks, reproductions, `repo-facts.md`, `explore.md`, and every other semantic field stay covered. This lets the documented state-model and closure writes converge without hiding the contract.
+
+Runs first write a durable admission marker under the receipt store, then take a per-check owner lock. If an admitted attempt is newer than the latest receipt and has no complete receipt (lock failure, publication failure, crash, or interruption), `check` fails closed with an incomplete/abandoned-attempt error; only a later complete run restores current evidence. Completeness is separate from the result: `check` requires a valid receipt for the latest admitted attempt, while the result comes from the latest **completed** receipt (completion order), so concurrent runs whose completion order differs from admission order are handled without masking a later failure. Attempt history and old receipts are preserved. Same-prefix receipts are rejected as ambiguous, and `check` errors while an admission or run for that check is in progress. If the store cannot record admission at all (for example the slug store is unwritable), the run refuses to execute and is not admitted; `check` cannot report an attempt that was never recorded. On timeout the runner settles on exit or the deadline, kills its owned process group, and drains pipes with a bounded grace; if output streams remain open (`streamsClosed` false), the run cannot pass. Read paths validate every `.attempts`/`.locks` component, lock-owner file, and attempt marker before reading; a symlink there is rejected. The final receipt component remains a documented same-permission read boundary because a same-permission writer can replace receipts outright. A symlinked ancestor in the worktree or under `.forge/evidence/` is rejected before reading or writing, so a tracked path cannot be read through an external directory symlink and a receipt cannot be routed outside the repository.
+
+Limits: Forge Check proves what ran against which candidate, not that the check is meaningful or that behavior is correct. Hashes and before/after captures cannot detect a temporary edit restored between captures, and this is not a security boundary against a writer with the same filesystem permissions. Git-ignored files (including an installed dependency tree) are outside the identity: a lockfile or manifest change is covered, but an in-place dependency change with no tracked change is not. Submodule contents and nested Git repositories are represented only by their directory/gitlink entry, not recursively hashed. Runner metadata is intentionally basic (platform, arch, Node version); arbitrary environment variables are not part of the identity. Non-UTF-8 path rejection is exercised at the byte-predicate level because APFS refuses to create such names; it is not claimed as a real-filesystem test. A deliberately detached descendant with its own or ignored stdio is outside cleanup and visibility; one that keeps inherited pipes open makes the run fail closed. Process-group cleanup is POSIX; on Windows the runner can target only the direct child, so an inherited-pipe descendant still fails the run closed after the grace but may outlive it. Non-Git directories are rejected rather than treated as mechanically verified, and merge authorization is never implied by a passing check.
 
 ## Supported Agents
 

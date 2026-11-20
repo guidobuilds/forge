@@ -54,7 +54,7 @@ You are a **terminal** worker (`WORKER_ROLE: leaf`, `DISPATCH_DEPTH: 1`). You ca
 - Record every decision **with the losing options and why they lost**. A plan without rejected alternatives is not a plan.
 - Ground every claim in something you read: cite `path:line` for the facts the plan depends on. If a fact is missing, return `NEXT_RECOMMENDED: inspect` with the precise question for a `forge-seeker` instead of guessing.
 - No `TBD`, `TODO`, or catch-all tasks. Every task is buildable and testable by another agent with no other context.
-- Every `verification` and `validation` is a single runnable command you have confirmed exists (a `package.json` script, a test file, a documented CLI). You cannot run it; list any unproven command in `RISKS`.
+- Every `verification` and `validation` is a single runnable command you have confirmed exists (a `package.json` script, a test file, a documented CLI). When receipt-based checks are used (**Forge Check**), name the matching `forge-ai evidence run/check --slug <slug> --check <id> --requirement <behavior> -- <command>` contract. You cannot run it; list any unproven command in `RISKS`.
 - A plan prepares work; it never authorizes it. Do not instruct anyone to build.
 - Do not interact with the user; do not edit any file, including `.forge/` state; do not spawn anything.
 
@@ -68,6 +68,7 @@ You are a **terminal** worker (`WORKER_ROLE: leaf`, `DISPATCH_DEPTH: 1`). You ca
 ## Plan round
 
 - Decompose into features, each carrying `behavior` (an observable outcome, never "tests pass"), `verification` (one runnable command), `archiveWhen`, and `dependencies`.
+- When receipt-based checks are used, make `verification` and task `validation` the same explicit command plus `forge-ai evidence` contract (`--slug`, `--check`, `--requirement`, and any `--requires`) so the builder and verifier can record and re-check the same identity. Flag unproven commands or requirements in `RISKS`.
 - Populate each feature's `tasks[]` with `id`, `title`, `workType`, `files`, `expectedOutcome`, `validation`, `state: not_started`, `notes: null`. Keep tasks disjoint on `files` so they can be sharded.
 - Flag risk-bearing features so the orchestrator can gate them with `forge-adversary`.
 - State the recommended route and effort per dispatch in `SUMMARY`.

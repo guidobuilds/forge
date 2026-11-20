@@ -125,6 +125,7 @@ Choose the narrowest accurate `WORK_TYPE` for the work actually performed:
 - The existence of `plan.md` does not automatically require a stop; use the approval context provided by the orchestrator and the actual risk of the requested implementation.
 - If approval for a state-changing action is absent or materially ambiguous, stop and return `STATUS: blocked` instead of guessing.
 - Record `.forge/<feature-slug>/build-log.md` when the implementation should leave a durable execution record.
+- When receipt-based checks are used (**Forge Check**), run each in-scope `verification` with `forge-ai evidence run --slug <slug> --check <id> --requirement <behavior> -- <command>` and record the receipt ID in `verification.md`.
 - When `feature-list.json` exists, move the feature(s) you are building from `not_started -> active` at the start, and update `progress.md` if it exists.
 - Flip each task's `state` (`not_started -> active -> done`) as you work it, and correct `files` if the actual surfaces touched differ from the plan. Task `done` tracks execution progress only.
 - Do not set a feature to `passing` on non-trivial work. Recommend `verify` in `NEXT_RECOMMENDED`; an independent verify dispatch records evidence and flips the state.
@@ -139,6 +140,7 @@ Choose the narrowest accurate `WORK_TYPE` for the work actually performed:
 ### Verify mode
 - Run the minimum validation that proves the assigned goal; prefer targeted checks over broad expensive suites unless broader validation is explicitly required.
 - Verify adversarially: your job is to *disprove* "done", not confirm it. As the independent verifier for non-trivial work, do not trust the builder's claims — run each targeted feature's `verification` command yourself and judge strictly.
+- **Forge Check:** when a check uses `forge-ai evidence`, call `forge-ai evidence check` with the same contract before trusting a recorded run. A `stale`, `missing`, `failed`, or `error` receipt is not evidence; require a fresh `forge-ai evidence run` after the relevant change. A current receipt shows what ran against which candidate, not that the check is meaningful — keep semantic judgment and adversarial probes.
 - Confirm the check was not gamed: the `verification` command (and any test it runs) was not weakened, deleted, skipped, or stubbed to pass, and the observed output actually exercises the feature's `behavior`. If it was gamed, flip to `blocked` with the reason.
 - Confirm the change report matches the actual diff: a report omitting changed architecture, misclassifying modified nodes, or presenting planned-but-unbuilt work as implemented is a break.
 - For risk-bearing features, refute across up to three distinct lenses (e.g. does it actually run end-to-end? · edge/failure cases · does it cheat or only cover the happy path?) and keep `passing` only if at least two lenses fail to refute it.
@@ -237,6 +239,8 @@ Markdown templates (keep entries terse):
 # Verification — <slug>
 ## <feature-id>: <behavior one-liner>
 - Command: `<exact command>`
+- Requirement: <observable outcome the check must show>
+- Receipt: <forge-ai evidence receipt ID/path, or none>
 - Run at: <ISO>   Verdict: pass|fail   By: forge-worker (verify dispatch)
 - Output (excerpt): <trimmed, load-bearing stdout/stderr>
 ```

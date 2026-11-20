@@ -11,6 +11,7 @@ import { knownClaudeModels } from './adapters/claude-known.js';
 import { knownCodexModels } from './adapters/codex-known.js';
 import { knownGrokModels } from './adapters/grok-known.js';
 import { formatDiagnostic, hasErrors } from './diagnostics.js';
+import { runEvidenceCli } from './evidence-cli.js';
 import { buildManifest, classifyPruneEntries, detectLegacyStateDrift, listInstalls, loadManifest, pruneEntries, resolveBackupPath, resolveBackupRoot, resolveManifestLocation, saveManifest, stateRoot, staleEntries, type InstallSummary, type ManifestEntry, type PrunePlanItem } from './manifest.js';
 import { getModelPreference, loadModelPreferences, modelPreferencesPath, saveModelPreferences, setModelPreference, type ModelPreferences } from './model-preferences.js';
 import { discoverModels, mergeLiveWithCurated } from './model-discovery.js';
@@ -22,7 +23,7 @@ import { checkLatestVersion, formatVersionNotice } from './version-check.js';
 import { writeOutputs } from './writer.js';
 import { hasPendingDecisions, type CanonicalArtifact, type Diagnostic, type OutputFile, type Platform, type PlatformArg, type Scope, type WritePlan } from './model.js';
 
-type Command = 'validate' | 'install' | 'update' | 'uninstall' | 'list' | 'configure' | 'self-update';
+type Command = 'validate' | 'install' | 'update' | 'uninstall' | 'list' | 'configure' | 'self-update' | 'evidence';
 type CliOptions = {
   command?: string;
   platform: PlatformArg;
@@ -64,6 +65,12 @@ export async function main(argv = process.argv.slice(2), promptIO: PromptIO = {}
   if (argv[0] === '--version' || argv[0] === '-v') {
     console.log(readPackageVersion());
     return 0;
+  }
+
+  // Evidence has its own argv grammar (flags up to `--`, then the explicit command). Handle it
+  // before the installer/updater parser so a check command's own flags are never reinterpreted.
+  if (argv[0] === 'evidence') {
+    return runEvidenceCli(argv.slice(1));
   }
 
   const parsed = parseArgs(argv);
@@ -825,6 +832,7 @@ function normalizeCommand(command?: string): Command | undefined {
   if (command === 'list' || command === 'ls') return 'list';
   if (command === 'configure') return 'configure';
   if (command === 'self-update') return 'self-update';
+  if (command === 'evidence') return 'evidence';
   return undefined;
 }
 
@@ -872,6 +880,7 @@ function showUsage(): void {
   console.log('       forge-ai list');
   console.log('       forge-ai configure [--platform opencode|claude|codex|grok] [--scope user|project] [--source <dir>] [--dry-run] [--model <id>] [--model-map name=model,...]');
   console.log('       forge-ai validate [--platform opencode|claude|codex|grok|all] [--source <dir>]');
+  console.log('       forge-ai evidence run|check --slug <slug> --check <id> --requirement <text> [--requires <id>]... [--timeout <ms>] [--cwd <dir>] -- <command> [args...]');
   console.log('       forge-ai self-update [--to <version>] [--dry-run] [--skip-spec-update]');
   console.log('');
   console.log('--model and --model-map require an explicit single --platform (model ids are not portable across platforms).');
